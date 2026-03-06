@@ -1,0 +1,63 @@
+import { Category, PostTag } from "./types";
+
+const now = new Date().toISOString();
+
+export const allowedCategories: Category[] = [
+  "Woodworking",
+  "Swimming",
+  "Football",
+  "Hiking",
+  "Photography",
+  "Homelab",
+  "Cooking",
+  "Gardening",
+  "Fitness",
+  "Music",
+  "Gaming",
+  "Cycling",
+  "Running",
+  "Yoga",
+  "Pottery",
+  "Painting",
+  "3D Printing",
+  "Robotics",
+  "Electronics",
+  "Baking",
+  "Coffee",
+  "Tea",
+  "Camping",
+  "Fishing",
+  "Birdwatching",
+  "Model Building",
+  "Board Games",
+  "Chess",
+  "Dancing",
+  "Piano",
+  "Guitar",
+  "Singing",
+  "Podcasting",
+  "Writing",
+  "Poetry",
+  "Calligraphy",
+  "Sewing",
+  "Knitting",
+  "Crochet",
+  "Leathercraft",
+  "Car Detailing",
+  "Motorcycles",
+  "Home DIY",
+  "Interior Design",
+  "Language Learning",
+  "Meditation",
+  "Volunteering",
+  "Pet Care",
+  "Aquariums",
+  "Astrophotography"
+].map((name) => ({
+  id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+  name,
+  isActive: true,
+  createdAt: now
+}));
+
+export const controlledPostTags: PostTag[] = ["WIN", "PROGRESS", "TIP", "QUESTION", "SHOWCASE"];

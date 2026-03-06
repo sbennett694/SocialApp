@@ -1,0 +1,24 @@
+{
+  "name": "socialapp-backend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "local-api": "node dist/localServer.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.750.0",
+    "@aws-sdk/lib-dynamodb": "^3.750.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.147",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  }
+}

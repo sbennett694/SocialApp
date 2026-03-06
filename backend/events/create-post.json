@@ -1,0 +1,9 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /posts",
+  "rawPath": "/posts",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"userId\":\"seth\",\"text\":\"Hello from SocialApp\"}"
+}

@@ -1,0 +1,32 @@
+# Dependencies / generated artifacts
+node_modules/
+dist/
+build/
+coverage/
+.expo/
+.cache/
+tmp/
+logs/
+*.log
+*.map
+*.min.js
+
+# Lockfiles (high churn, low analysis value)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Environment / secrets
+.env
+.env.*
+
+# AWS Amplify local generated state
+amplify/#current-cloud-backend/
+amplify/.config/
+
+# Git metadata
+.git/
+
+# OS noise
+.DS_Store
+Thumbs.db

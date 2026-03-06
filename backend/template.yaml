@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SocialApp serverless backend (low-cost, moderation-first)
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 10
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+        AllowOrigins:
+          - "*"
+
+  PostsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: postId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: postId
+          KeyType: HASH
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldTempObjects
+            Status: Enabled
+            ExpirationInDays: 90
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: socialapp-users
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  ListPostsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/handlers/posts.listPosts
+      Environment:
+        Variables:
+          POSTS_TABLE_NAME: !Ref PostsTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PostsTable
+      Events:
+        ListPosts:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /posts
+            Method: GET
+
+  CreatePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/handlers/posts.createPost
+      Environment:
+        Variables:
+          POSTS_TABLE_NAME: !Ref PostsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PostsTable
+      Events:
+        CreatePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /posts
+            Method: POST
+
+  ModerateContentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/handlers/moderation.checkContent
+      Events:
+        ModerateContent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /moderation/check
+            Method: POST
+
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: socialapp-monthly-budget
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 50
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 30
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: change-me@example.com
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 60
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: change-me@example.com
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 90
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: change-me@example.com
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com"
+  PostsTableName:
+    Value: !Ref PostsTable
+  MediaBucketName:
+    Value: !Ref MediaBucket
+  UserPoolId:
+    Value: !Ref UserPool
