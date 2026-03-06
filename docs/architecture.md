@@ -35,13 +35,15 @@ This document is the architecture source of truth for SocialApp. Future tasks sh
 
 ## App Navigation
 Top-level app structure (`mobile/App.tsx`):
+- **Home**: dashboard-style landing screen with capped sections (active projects, change summary, project progress signals, club updates, recent activity, notifications preview)
 - **Commons**: main feed + composer + thread responses
-- **Clubs**: club discovery/creation/membership flows
+- **Clubs**: 3-tab clubs hub (`My Clubs`, `Discover`, `Club Feed`) plus per-club detail tabs (`Highlights`, `Members`, `Projects`, `Project Requests` for owner/admin)
 - **Projects**: project detail, milestones, tasks, highlights, project-club links
+- **Notifications**: personalized notifications list for viewer-relevant activity
 - **Profile**: user profile content tabs + network management
 - **Search**: nav action opens search UI; supports live suggestions and explicit Find/Enter execution
 
-Current nav row pattern: **SocialApp | Commons | Clubs | Projects | Profile | Search**
+Current nav row pattern: **SocialApp (Home) | Commons | Clubs | Projects | Profile | Search | Notifications (bell icon + unread badge)**
 
 ## Core Social Model
 - **Follow:** one-way relationship (`Follow`)
@@ -55,6 +57,8 @@ Current nav row pattern: **SocialApp | Commons | Clubs | Projects | Profile | Se
 ## Commons Feed Projection Model
 - Commons now supports an activity-projection layer via `FeedEvent` while preserving the legacy post feed path.
 - Source entities remain canonical (`Post`, `Project`, milestone/task records, highlights); `FeedEvent` is a derived activity layer.
+- Mobile Commons UI now renders event-backed activity cards by event type (post/club post/project highlight/project created/milestone completed/task completed) for improved scanability.
+- Mobile Commons UI also applies lightweight progress compaction for repetitive `TASK_COMPLETED` events (same actor + same project + close time window), presenting grouped summary cards while leaving canonical FeedEvents unchanged.
 - MVP `FeedEvent` taxonomy:
   - `POST_CREATED`
   - `CLUB_POST_CREATED`
@@ -126,8 +130,10 @@ Primary local service is Express with modular composition:
 
 High-value route groups:
 - **Health/config:** `/health`, `/categories`, `/users`, `/search`
+- **Dev data utilities (non-production):** `/dev/reset-data`, `/dev/seed-demo-data`
 - **Social graph:** `/follow`, `/close-circle/*`, relationship/mute/block routes
 - **Feeds:** `/feed/commons`, `/feed/clubs`, `/feed/projects`, `/posts`
+- **Notifications:** `/notifications` (viewer-scoped MVP notification aggregation)
 - **Clubs:** `/clubs`, `/clubs/:clubId/*`
 - **Projects:** `/projects`, `/projects/:projectId/*`, milestones/tasks/highlights
 - **Project-club links:** `/projects/:projectId/clubs` + review route
@@ -174,10 +180,12 @@ backend/src/
 ```
 
 ## Frontend Structure
-- `mobile/App.tsx`: top-level nav, dev user switcher, global search UI
+- `mobile/App.tsx`: top-level nav, dev user switcher, global search UI, and shared notifications unread state/badge wiring
+- `mobile/src/screens/HomeScreen.tsx`: dashboard-style home surface composed from existing endpoints with capped sections and pull-to-refresh
 - `mobile/src/api/client.ts`: typed API client and route wrappers
-- `mobile/src/screens/FeedScreen.tsx`: commons feed + composer + threaded responses
-- `mobile/src/screens/ClubsScreen.tsx`: clubs UX
+- `mobile/src/screens/FeedScreen.tsx`: event-backed commons activity cards + composer + threaded responses for post-backed events + lightweight feed-type filter bar (All/Posts/Projects/Progress)
+- `mobile/src/screens/NotificationsScreen.tsx`: personalized notifications list with lightweight unread/read visual state and tap-through routing to relevant tab
+- `mobile/src/screens/ClubsScreen.tsx`: clubs 3-tab hub + club detail management flows (membership roles, highlight posting, project request review)
 - `mobile/src/screens/ProjectsScreen.tsx`: project detail and workflow UIs
 - `mobile/src/screens/ProfileScreen.tsx`: profile content tabs + network management
 - `mobile/src/auth/session.ts`: mock user/session helpers
@@ -185,8 +193,9 @@ backend/src/
 
 ## State Management
 - No Redux/Zustand/global store currently.
-- State is managed screen-locally via `useState`/`useEffect`.
+- State is managed with `useState`/`useEffect`; notifications unread/read state is lifted to `App.tsx` so nav badge and screen stay in sync.
 - Data refreshes are API-call driven per screen/flow.
+- Home dashboard aggregation is client-side orchestration over existing endpoints (no dedicated home backend endpoint in MVP).
 
 ## Environment / Configuration
 - Mobile env:
@@ -233,12 +242,23 @@ For backend repository behavior:
 - Leave unset (or `SOCIALAPP_REPOSITORY_MODE=memory`) for current in-memory local flow.
 - `file`/`sqlite`/`dynamodb` values are scaffolded for future adapters, but intentionally not implemented yet.
 
+### Developer demo-data seeding workflow
+
+- `POST /dev/reset-data` resets local in-memory state to minimal default seed.
+- `POST /dev/seed-demo-data` loads richer demo scenarios for local UX testing.
+- Helper scripts (`backend/package.json`):
+  - `npm run dev:reset`
+  - `npm run dev:seed`
+  - `npm run dev:reseed`
+
+These routes are intended for local/development use and are disabled when `NODE_ENV=production`.
+
 ## Known Gaps / TODOs
 - Local backend uses in-memory state (non-persistent).
 - Serverless handlers and local Express runtime are not yet fully unified.
 - Auth is mock-first; Cognito not wired as active runtime path.
 - Search currently routes to major tabs/profile focus, not deep-linked object detail pages.
-- Commons activity/event model is implemented but still text-template-based (not structured activity types).
+- Commons activity/event model now has event-type card rendering in mobile; deeper metadata-driven card payloads remain a future enhancement.
 - Web/iOS deployment paths are planned but not yet fully productized.
 
 ## Related Documentation

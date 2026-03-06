@@ -5,6 +5,8 @@ import {
   ProjectHighlight,
   ProjectMilestone,
   ProjectMilestoneTask,
+  resetStoreToDefault,
+  seedStoreWithDemoData,
   store as inMemoryStore
 } from "./inMemoryStore";
 
@@ -29,6 +31,8 @@ const providers: Record<RepositoryMode, typeof inMemoryStore> = {
 };
 
 export const store = providers[repositoryMode];
+
+export { resetStoreToDefault, seedStoreWithDemoData };
 
 export type {
   GlobalSearchResult,

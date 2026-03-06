@@ -35,6 +35,38 @@ Android-first social app built with React Native (Expo) and an AWS serverless ba
   - `EXPO_PUBLIC_AUTH_MODE=mock` (use `cognito` later when integrating AWS auth)
 - Current mock auth mode lets you build UI and flows without deploying AWS auth yet.
 
+## Local Demo Data Seeding (Developer)
+
+To make feature testing easier, local API now includes **dev-only seed/reset endpoints** plus helper scripts.
+
+### 1) Start local API
+- `npm --prefix backend run local-api`
+
+### 2) Seed demo data
+- `npm --prefix backend run dev:seed`
+
+### 3) Reset to minimal default data
+- `npm --prefix backend run dev:reset`
+
+### 4) Reset + reseed in one command
+- `npm --prefix backend run dev:reseed`
+
+Notes:
+- These endpoints are local/dev only (disabled when `NODE_ENV=production`).
+- Optional base URL override for scripts:
+  - `SOCIALAPP_LOCAL_API_URL=http://127.0.0.1:3001`
+
+Seeded demo scenarios include:
+- multi-user follows + close-circle relationships
+- clubs with mixed membership roles
+- projects linked to clubs
+- milestones/tasks with mixed DONE/OPEN states
+- project highlights + commons/club posts
+- feed events for project created/highlight/progress and posts
+- comments/reactions that generate notifications
+
+This is intended to exercise Home dashboard, Commons activity, club updates, project progress, and notifications.
+
 ## Multi-User Local Testing (Real-World Style)
 - Run one shared local backend: `npm --prefix backend run local-api`
 - Run frontend: `npm --prefix mobile run web -- --port 8082`

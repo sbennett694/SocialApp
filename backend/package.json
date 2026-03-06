@@ -5,7 +5,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "local-api": "node dist/localServer.js"
+    "local-api": "npm run build && node dist/localServer.js",
+    "dev:seed": "node scripts/dev-seed.mjs seed",
+    "dev:reset": "node scripts/dev-seed.mjs reset",
+    "dev:reseed": "node scripts/dev-seed.mjs reseed"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.750.0",

@@ -1,14 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   Club,
-  ClubHighlight,
   ClubMember,
   createPost,
   createClub,
   getCategories,
   getProjectClubLinks,
-  getClubHighlights,
   getClubMembers,
   getClubProjects,
   getClubsFeed,
@@ -36,35 +34,32 @@ type ClubProjectRequest = {
 };
 
 export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
+  const [clubsPageTab, setClubsPageTab] = useState<"MY_CLUBS" | "DISCOVER" | "CLUB_FEED">("MY_CLUBS");
   const [clubs, setClubs] = useState<Club[]>([]);
   const [myClubs, setMyClubs] = useState<Club[]>([]);
   const [joinableClubs, setJoinableClubs] = useState<Club[]>([]);
   const [clubFeed, setClubFeed] = useState<Post[]>([]);
+  const [detailClubFeed, setDetailClubFeed] = useState<Post[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
-  const [highlights, setHighlights] = useState<{
-    joined: ClubHighlight[];
-    friends: ClubHighlight[];
-    mine: ClubHighlight[];
-    suggested: ClubHighlight[];
-  }>({
-    joined: [],
-    friends: [],
-    mine: [],
-    suggested: []
-  });
+
   const [clubSearch, setClubSearch] = useState("");
-  const [selectedClubId, setSelectedClubId] = useState<string>("");
+  const [discoverCategoryId, setDiscoverCategoryId] = useState("");
+  const [discoverCategoryPickerOpen, setDiscoverCategoryPickerOpen] = useState(false);
+  const [discoverCategorySearch, setDiscoverCategorySearch] = useState("");
+  const [clubFeedFilterClubId, setClubFeedFilterClubId] = useState("");
+
   const [newClubTitle, setNewClubTitle] = useState("");
   const [newClubDescription, setNewClubDescription] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
-  const [selectedHighlightsCategoryId, setSelectedHighlightsCategoryId] = useState("");
   const [newClubIsPublic, setNewClubIsPublic] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingClub, setEditingClub] = useState<Club | null>(null);
   const [editClubName, setEditClubName] = useState("");
   const [editClubDescription, setEditClubDescription] = useState("");
   const [editClubIsPublic, setEditClubIsPublic] = useState(true);
+
   const [viewingClub, setViewingClub] = useState<Club | null>(null);
   const [clubDetailTab, setClubDetailTab] = useState<"HIGHLIGHTS" | "MEMBERS" | "PROJECTS" | "PROJECT_REQUESTS">("HIGHLIGHTS");
   const [clubMembers, setClubMembers] = useState<ClubMember[]>([]);
@@ -72,6 +67,7 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
   const [clubProjectRequests, setClubProjectRequests] = useState<ClubProjectRequest[]>([]);
   const [clubDetailLoading, setClubDetailLoading] = useState(false);
   const [clubHighlightText, setClubHighlightText] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -79,13 +75,12 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
     setLoading(true);
     setMessage(null);
     try {
-      const [clubData, myClubData, joinableData, clubPosts, categoryData, highlightData] = await Promise.all([
+      const [clubData, myClubData, joinableData, clubPosts, categoryData] = await Promise.all([
         searchClubs({ viewerId: user.userId, search: clubSearch }),
         getUserClubs(user.userId),
         searchClubs({ viewerId: user.userId, search: clubSearch, joinableOnly: true }),
-        getClubsFeed(user.userId, selectedClubId || undefined),
-        getCategories(),
-        getClubHighlights(user.userId, selectedHighlightsCategoryId || undefined)
+        getClubsFeed(user.userId, clubFeedFilterClubId || undefined),
+        getCategories()
       ]);
 
       setClubs(clubData);
@@ -93,19 +88,12 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
       setJoinableClubs(joinableData);
       setClubFeed(clubPosts);
       setCategories(categoryData.categories);
-      setHighlights({
-        joined: highlightData.joined ?? [],
-        friends: highlightData.friends ?? [],
-        mine: highlightData.mine ?? [],
-        suggested: highlightData.suggested ?? []
-      });
 
       if (!selectedCategoryId && categoryData.categories.length > 0) {
         setSelectedCategoryId(categoryData.categories[0].id);
       }
-
-      if (!selectedHighlightsCategoryId && categoryData.categories.length > 0) {
-        setSelectedHighlightsCategoryId(categoryData.categories[0].id);
+      if (!discoverCategoryId && categoryData.categories.length > 0) {
+        setDiscoverCategoryId(categoryData.categories[0].id);
       }
     } catch (err) {
       setMessage((err as Error).message);
@@ -116,11 +104,12 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
 
   useEffect(() => {
     loadData();
-  }, [user.userId, clubSearch, selectedClubId, selectedHighlightsCategoryId]);
+  }, [user.userId, clubSearch, clubFeedFilterClubId]);
 
   useEffect(() => {
     setViewingClub(null);
-    setSelectedClubId("");
+    setClubFeedFilterClubId("");
+    setClubsPageTab("MY_CLUBS");
   }, [rootResetSignal]);
 
   async function handleJoinClub(clubId: string, clubName: string) {
@@ -160,12 +149,16 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
   async function openClubDetail(club: Club) {
     setViewingClub(club);
     setClubDetailTab("HIGHLIGHTS");
-    setSelectedClubId(club.id);
     setClubDetailLoading(true);
     try {
-      const [members, projects] = await Promise.all([getClubMembers(club.id), getClubProjects(club.id)]);
+      const [members, projects, clubPosts] = await Promise.all([
+        getClubMembers(club.id),
+        getClubProjects(club.id),
+        getClubsFeed(user.userId, club.id)
+      ]);
       setClubMembers(members);
       setClubProjects(projects);
+      setDetailClubFeed(clubPosts);
 
       const viewerRole = members.find((member) => member.userId === user.userId)?.role;
       const canManage = viewerRole === "OWNER" || viewerRole === "MODERATOR";
@@ -207,6 +200,7 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
       });
       setMessage(status === "APPROVED" ? "Project request approved." : "Project request rejected.");
       await openClubDetail(viewingClub);
+      loadData();
     } catch (err) {
       setMessage((err as Error).message);
     }
@@ -284,21 +278,40 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
     }
   }
 
-  if (loading) return <ActivityIndicator style={{ marginTop: 24 }} />;
-
-  const safeHighlights = {
-    joined: highlights.joined ?? [],
-    friends: highlights.friends ?? [],
-    mine: highlights.mine ?? [],
-    suggested: highlights.suggested ?? []
-  };
-
-  const clubSpecificHighlights = [...safeHighlights.joined, ...safeHighlights.friends, ...safeHighlights.mine, ...safeHighlights.suggested].filter(
-    (entry, index, arr) => entry.club.id === viewingClub?.id && arr.findIndex((e) => e.club.id === entry.club.id) === index
+  const discoverCategoryFilteredClubs = useMemo(
+    () => (discoverCategoryId ? clubs.filter((club) => club.categoryId === discoverCategoryId) : clubs),
+    [clubs, discoverCategoryId]
   );
+  const discoverCategoryFilteredJoinable = useMemo(
+    () => (discoverCategoryId ? joinableClubs.filter((club) => club.categoryId === discoverCategoryId) : joinableClubs),
+    [joinableClubs, discoverCategoryId]
+  );
+  const featuredDiscoverCategories = useMemo(() => categories.slice(0, 4), [categories]);
+  const discoverSelectedCategory = useMemo(
+    () => categories.find((category) => category.id === discoverCategoryId) ?? null,
+    [categories, discoverCategoryId]
+  );
+  const discoverModalCategories = useMemo(() => {
+    const query = discoverCategorySearch.trim().toLowerCase();
+    if (!query) return categories;
+    return categories.filter((category) => category.name.toLowerCase().includes(query));
+  }, [categories, discoverCategorySearch]);
+
+  const isInitialLoad =
+    loading &&
+    clubs.length === 0 &&
+    myClubs.length === 0 &&
+    joinableClubs.length === 0 &&
+    clubFeed.length === 0 &&
+    !viewingClub;
+
+  if (isInitialLoad) return <ActivityIndicator style={{ marginTop: 24 }} />;
+
   const ownerMembers = clubMembers.filter((member) => member.role === "OWNER");
   const nonOwnerMembers = clubMembers.filter((member) => member.role !== "OWNER");
-  const viewerMembership = viewingClub ? clubMembers.find((member) => member.clubId === viewingClub.id && member.userId === user.userId) : null;
+  const viewerMembership = viewingClub
+    ? clubMembers.find((member) => member.clubId === viewingClub.id && member.userId === user.userId)
+    : null;
   const canManageClub = viewerMembership?.role === "OWNER" || viewerMembership?.role === "MODERATOR";
   const isOwner = viewerMembership?.role === "OWNER";
 
@@ -310,13 +323,7 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View>
-            <Pressable
-              onPress={() => {
-                setViewingClub(null);
-                setSelectedClubId("");
-              }}
-              style={styles.buttonInline}
-            >
+            <Pressable onPress={() => setViewingClub(null)} style={styles.buttonInline}>
               <Text style={styles.buttonText}>← Back to Clubs</Text>
             </Pressable>
 
@@ -359,11 +366,39 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
 
             {clubDetailLoading ? <ActivityIndicator style={{ marginTop: 12 }} /> : null}
 
+            {clubDetailTab === "HIGHLIGHTS" ? (
+              <>
+                <Text style={styles.sectionTitle}>Club Highlights</Text>
+                {canManageClub ? (
+                  <View style={styles.card}>
+                    <Text style={styles.filterLabel}>Post highlight as club</Text>
+                    <TextInput
+                      value={clubHighlightText}
+                      onChangeText={setClubHighlightText}
+                      placeholder="Share a club highlight"
+                      style={styles.input}
+                    />
+                    <Pressable onPress={handlePostClubHighlight} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Post as @{viewingClub.name}</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {detailClubFeed.length === 0 ? <Text style={styles.hint}>No club posts yet.</Text> : null}
+                {detailClubFeed.map((post) => (
+                  <View key={`club-feed-${post.postId}`} style={styles.card}>
+                    <Text style={styles.clubName}>
+                      {post.postedAsClub ? `@${viewingClub.name} by ${post.clubActorId ?? post.userId}` : `@${post.userId}`}
+                    </Text>
+                    <Text>{post.text}</Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+
             {clubDetailTab === "MEMBERS" ? (
               <>
                 <Text style={styles.sectionTitle}>Club Members</Text>
                 <Text style={styles.filterLabel}>Owner</Text>
-                {ownerMembers.length === 0 ? <Text style={styles.hint}>No owner data found.</Text> : null}
                 {ownerMembers.map((member) => (
                   <View key={`${member.clubId}-${member.userId}`} style={styles.card}>
                     <Text style={styles.clubName}>@{member.userId}</Text>
@@ -398,64 +433,10 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
               </>
             ) : null}
 
-            {clubDetailTab === "HIGHLIGHTS" ? (
-              <>
-                <Text style={styles.sectionTitle}>Club Highlights</Text>
-                {canManageClub ? (
-                  <View style={styles.card}>
-                    <Text style={styles.filterLabel}>Post highlight as club</Text>
-                    <TextInput
-                      value={clubHighlightText}
-                      onChangeText={setClubHighlightText}
-                      placeholder="Share a club highlight"
-                      style={styles.input}
-                    />
-                    <Pressable onPress={handlePostClubHighlight} style={styles.buttonInline}>
-                      <Text style={styles.buttonText}>Post as @{viewingClub.name}</Text>
-                    </Pressable>
-                  </View>
-                ) : null}
-                {clubSpecificHighlights.length === 0 ? <Text style={styles.hint}>No highlights yet for this club.</Text> : null}
-                {clubSpecificHighlights.map((entry) => (
-                  <View key={`club-highlight-${entry.club.id}`} style={styles.card}>
-                    <Text style={styles.clubName}>{entry.club.name}</Text>
-                    {entry.samplePost ? (
-                      <>
-                        <Text style={styles.hint}>
-                          @{entry.club.name} by {entry.samplePost.clubActorId ?? entry.samplePost.userId}
-                        </Text>
-                        <Text>{entry.samplePost.text}</Text>
-                      </>
-                    ) : (
-                      <Text style={styles.hint}>No sampled posts yet.</Text>
-                    )}
-                  </View>
-                ))}
-
-                <Text style={styles.sectionTitle}>Club Events</Text>
-                <View style={styles.card}>
-                  <Text style={styles.hint}>TODO: Build event creation and RSVP system for clubs.</Text>
-                </View>
-
-                <Text style={styles.sectionTitle}>Recent Club Posts</Text>
-                {clubFeed.length === 0 ? <Text style={styles.hint}>No club posts yet.</Text> : null}
-                {clubFeed.map((post) => (
-                  <View key={`club-feed-${post.postId}`} style={styles.card}>
-                    <Text style={styles.clubName}>
-                      {post.postedAsClub ? `@${viewingClub.name} by ${post.clubActorId ?? post.userId}` : `@${post.userId}`}
-                    </Text>
-                    <Text>{post.text}</Text>
-                  </View>
-                ))}
-              </>
-            ) : null}
-
             {clubDetailTab === "PROJECTS" ? (
               <>
                 <Text style={styles.sectionTitle}>Projects</Text>
-                {clubProjects.length === 0 ? (
-                  <Text style={styles.hint}>No approved projects linked to this club yet.</Text>
-                ) : null}
+                {clubProjects.length === 0 ? <Text style={styles.hint}>No approved projects linked to this club yet.</Text> : null}
                 {clubProjects.map((item) => (
                   <View key={`club-project-${item.id}`} style={styles.card}>
                     <Text style={styles.clubName}>{item.title}</Text>
@@ -469,19 +450,14 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
             {clubDetailTab === "PROJECT_REQUESTS" ? (
               <>
                 <Text style={styles.sectionTitle}>Project Requests</Text>
-                {!canManageClub ? <Text style={styles.hint}>Only club owner/admin can review requests.</Text> : null}
-                {canManageClub && clubProjectRequests.length === 0 ? (
-                  <Text style={styles.hint}>No pending project requests.</Text>
-                ) : null}
+                {canManageClub && clubProjectRequests.length === 0 ? <Text style={styles.hint}>No pending project requests.</Text> : null}
                 {canManageClub
                   ? clubProjectRequests.map((request) => (
                       <View key={`club-request-${request.project.id}`} style={styles.card}>
                         <Text style={styles.clubName}>{request.project.title}</Text>
                         <Text style={styles.hint}>Owner: @{request.project.ownerId}</Text>
                         {request.project.description ? <Text style={styles.hint}>{request.project.description}</Text> : null}
-                        <Text style={styles.hint}>
-                          Requested: {new Date(request.link.createdAt).toLocaleString()}
-                        </Text>
+                        <Text style={styles.hint}>Requested: {new Date(request.link.createdAt).toLocaleString()}</Text>
                         <View style={styles.rowWrap}>
                           <Pressable
                             onPress={() => handleReviewClubProjectRequest(request.project.id, "APPROVED")}
@@ -498,7 +474,7 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
                         </View>
                       </View>
                     ))
-                  : null}
+                  : <Text style={styles.hint}>Only club owner/admin can review requests.</Text>}
               </>
             ) : null}
           </View>
@@ -510,144 +486,235 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
 
   return (
     <>
-      <FlatList
-        data={joinableClubs}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        refreshing={loading}
-        onRefresh={loadData}
-        ListHeaderComponent={
-          <View>
-          <Text style={styles.sectionTitle}>Clubs</Text>
-          <Text style={styles.hint}>Create clubs, browse highlights, and filter the club commons as {user.displayName}.</Text>
-          {message ? <Text style={styles.message}>{message}</Text> : null}
-
-          <Pressable onPress={() => setCreateModalOpen(true)} style={styles.button}>
-            <Text style={styles.buttonText}>Create a Club</Text>
+      <View style={styles.list}>
+        <Text style={styles.sectionTitle}>Clubs</Text>
+        <Text style={styles.hint}>View your clubs, discover clubs to join, and browse club activity.</Text>
+        {message ? <Text style={styles.message}>{message}</Text> : null}
+        <View style={styles.rowWrap}>
+          <Pressable onPress={() => setClubsPageTab("MY_CLUBS")} style={[styles.pill, clubsPageTab === "MY_CLUBS" && styles.pillActive]}>
+            <Text style={[styles.pillText, clubsPageTab === "MY_CLUBS" && styles.pillTextActive]}>My Clubs</Text>
           </Pressable>
+          <Pressable onPress={() => setClubsPageTab("DISCOVER")} style={[styles.pill, clubsPageTab === "DISCOVER" && styles.pillActive]}>
+            <Text style={[styles.pillText, clubsPageTab === "DISCOVER" && styles.pillTextActive]}>Discover</Text>
+          </Pressable>
+          <Pressable onPress={() => setClubsPageTab("CLUB_FEED")} style={[styles.pill, clubsPageTab === "CLUB_FEED" && styles.pillActive]}>
+            <Text style={[styles.pillText, clubsPageTab === "CLUB_FEED" && styles.pillTextActive]}>Club Feed</Text>
+          </Pressable>
+        </View>
+      </View>
 
-          <Text style={styles.sectionTitle}>My Clubs</Text>
-          {myClubs.length === 0 ? <Text style={styles.hint}>You are not in any clubs yet.</Text> : null}
-          {myClubs.map((club) => {
-            const active = selectedClubId === club.id;
-            const isOwner = club.ownerId === user.userId;
+      {clubsPageTab === "MY_CLUBS" ? (
+        <FlatList
+          data={myClubs}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          refreshing={loading}
+          onRefresh={loadData}
+          ListHeaderComponent={
+            <View>
+              <Pressable onPress={() => setCreateModalOpen(true)} style={styles.button}>
+                <Text style={styles.buttonText}>Create a Club</Text>
+              </Pressable>
+              <Text style={styles.hint}>Clubs you are currently part of.</Text>
+            </View>
+          }
+          ListEmptyComponent={<Text style={styles.hint}>You are not in any clubs yet.</Text>}
+          renderItem={({ item }) => {
+            const isOwnerClub = item.ownerId === user.userId;
             return (
-              <View key={`my-${club.id}`} style={styles.card}>
-                <Text style={styles.clubName}>{club.name}</Text>
-                <Text style={styles.hint}>{club.description || "No description yet"}</Text>
+              <View style={styles.card}>
+                <Text style={styles.clubName}>{item.name}</Text>
+                <Text style={styles.hint}>{item.description || "No description yet"}</Text>
                 <View style={styles.rowWrap}>
-                  <Pressable
-                    onPress={() => openClubDetail(club)}
-                    style={[styles.pill, active && styles.pillActive]}
-                  >
-                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{active ? "Viewing" : "View Club"}</Text>
+                  <Pressable onPress={() => openClubDetail(item)} style={styles.pill}>
+                    <Text style={styles.pillText}>View Club</Text>
                   </Pressable>
-                  {isOwner ? (
-                    <Pressable onPress={() => openEditModal(club)} style={styles.pill}>
+                  {isOwnerClub ? (
+                    <Pressable onPress={() => openEditModal(item)} style={styles.pill}>
                       <Text style={styles.pillText}>Modify Info</Text>
                     </Pressable>
                   ) : null}
                 </View>
               </View>
             );
-          })}
+          }}
+        />
+      ) : null}
 
-          <Text style={styles.sectionTitle}>Highlights</Text>
-          <Text style={styles.filterLabel}>Highlight Category</Text>
-          <View style={styles.rowWrap}>
-            {categories.map((category) => {
-              const active = selectedHighlightsCategoryId === category.id;
-              return (
+      {clubsPageTab === "DISCOVER" ? (
+        <FlatList
+          data={discoverCategoryFilteredJoinable}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          refreshing={loading}
+          onRefresh={loadData}
+          ListHeaderComponent={
+            <View>
+              <Text style={styles.sectionTitle}>Discover Clubs</Text>
+              <TextInput
+                value={clubSearch}
+                onChangeText={setClubSearch}
+                placeholder="Search clubs or categories"
+                style={styles.input}
+              />
+              <Text style={styles.filterLabel}>Category</Text>
+              <View style={styles.rowWrap}>
+                <Pressable onPress={() => setDiscoverCategoryId("")} style={[styles.pill, discoverCategoryId === "" && styles.pillActive]}>
+                  <Text style={[styles.pillText, discoverCategoryId === "" && styles.pillTextActive]}>All</Text>
+                </Pressable>
+                {featuredDiscoverCategories.map((category) => {
+                  const active = discoverCategoryId === category.id;
+                  return (
+                    <Pressable
+                      key={`discover-category-${category.id}`}
+                      onPress={() => setDiscoverCategoryId(category.id)}
+                      style={[styles.pill, active && styles.pillActive]}
+                    >
+                      <Text style={[styles.pillText, active && styles.pillTextActive]}>{category.name}</Text>
+                    </Pressable>
+                  );
+                })}
+                {discoverSelectedCategory && !featuredDiscoverCategories.some((category) => category.id === discoverSelectedCategory.id) ? (
+                  <Pressable
+                    onPress={() => setDiscoverCategoryPickerOpen(true)}
+                    style={[styles.pill, styles.pillActive]}
+                  >
+                    <Text style={[styles.pillText, styles.pillTextActive]}>{discoverSelectedCategory.name}</Text>
+                  </Pressable>
+                ) : null}
                 <Pressable
-                  key={`highlight-category-${category.id}`}
-                  onPress={() => setSelectedHighlightsCategoryId(category.id)}
-                  style={[styles.pill, active && styles.pillActive]}
+                  onPress={() => {
+                    setDiscoverCategorySearch("");
+                    setDiscoverCategoryPickerOpen(true);
+                  }}
+                  style={styles.pill}
                 >
-                  <Text style={[styles.pillText, active && styles.pillTextActive]}>{category.name}</Text>
+                  <Text style={styles.pillText}>Filter</Text>
                 </Pressable>
-              );
-            })}
-          </View>
+              </View>
 
-          {safeHighlights.joined.slice(0, 4).map((entry) => (
-            <View key={`joined-${entry.club.id}`} style={styles.card}>
-              <Text style={styles.clubName}>Joined: {entry.club.name}</Text>
-              {entry.samplePost ? <Text style={styles.hint}>“{entry.samplePost.text}”</Text> : <Text style={styles.hint}>No posts yet.</Text>}
-            </View>
-          ))}
-          {safeHighlights.friends.slice(0, 4).map((entry) => (
-            <View key={`friend-${entry.club.id}`} style={styles.card}>
-              <Text style={styles.clubName}>Friends: {entry.club.name}</Text>
-              {entry.samplePost ? <Text style={styles.hint}>“{entry.samplePost.text}”</Text> : <Text style={styles.hint}>No posts yet.</Text>}
-            </View>
-          ))}
-          {safeHighlights.mine.slice(0, 4).map((entry) => (
-            <View key={`mine-${entry.club.id}`} style={styles.card}>
-              <Text style={styles.clubName}>Mine: {entry.club.name}</Text>
-              {entry.samplePost ? <Text style={styles.hint}>“{entry.samplePost.text}”</Text> : <Text style={styles.hint}>No posts yet.</Text>}
-            </View>
-          ))}
-          {safeHighlights.suggested.slice(0, 4).map((entry) => (
-            <View key={`suggested-${entry.club.id}`} style={styles.card}>
-              <Text style={styles.clubName}>Suggested: {entry.club.name}</Text>
-              {entry.samplePost ? <Text style={styles.hint}>“{entry.samplePost.text}”</Text> : <Text style={styles.hint}>No posts yet.</Text>}
-            </View>
-          ))}
-
-          <Text style={styles.sectionTitle}>Find Clubs</Text>
-          <TextInput
-            value={clubSearch}
-            onChangeText={setClubSearch}
-            placeholder="Search clubs or categories"
-            style={styles.input}
-          />
-
-          <Text style={styles.filterLabel}>Club Commons Filter</Text>
-          <View style={styles.rowWrap}>
-            <Pressable onPress={() => setSelectedClubId("")} style={[styles.pill, selectedClubId === "" && styles.pillActive]}>
-              <Text style={[styles.pillText, selectedClubId === "" && styles.pillTextActive]}>All Clubs</Text>
-            </Pressable>
-            {clubs.slice(0, 20).map((club) => {
-              const active = selectedClubId === club.id;
-              return (
-                <Pressable key={`filter-${club.id}`} onPress={() => setSelectedClubId(club.id)} style={[styles.pill, active && styles.pillActive]}>
-                  <Text style={[styles.pillText, active && styles.pillTextActive]}>{club.name}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Text style={styles.sectionTitle}>Available Clubs to Join</Text>
-          {joinableClubs.length === 0 ? (
-            <Text style={styles.hint}>No user-created clubs available to join yet.</Text>
-          ) : null}
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <Text style={styles.clubName}>{item.name}</Text>
-            <Text style={styles.hint}>{item.description || "User-created club"}</Text>
-            <Pressable onPress={() => handleJoinClub(item.id, item.name)} style={styles.button}>
-              <Text style={styles.buttonText}>Join Club</Text>
-            </Pressable>
-          </View>
-        )}
-        ListFooterComponent={
-          <View style={{ marginTop: 12 }}>
-            <Text style={styles.sectionTitle}>Club Feed</Text>
-            {clubFeed.length === 0 ? (
-              <Text style={styles.hint}>No club posts yet. Join a club and share a project update.</Text>
-            ) : (
-              clubFeed.map((post) => (
-                <View key={post.postId} style={styles.card}>
-                  <Text style={styles.clubName}>@{post.userId}</Text>
-                  <Text>{post.text}</Text>
+              <Text style={styles.sectionTitle}>Matching Clubs</Text>
+              {discoverCategoryFilteredClubs.slice(0, 8).map((club) => (
+                <View key={`discover-preview-${club.id}`} style={styles.card}>
+                  <Text style={styles.clubName}>{club.name}</Text>
+                  <Text style={styles.hint}>{club.description || "No description"}</Text>
                 </View>
-              ))
-            )}
+              ))}
+
+              <Text style={styles.sectionTitle}>Available to Join</Text>
+            </View>
+          }
+          ListEmptyComponent={<Text style={styles.hint}>No clubs available to join for this filter.</Text>}
+          renderItem={({ item }) => (
+            <View style={styles.card}>
+              <Text style={styles.clubName}>{item.name}</Text>
+              <Text style={styles.hint}>{item.description || "User-created club"}</Text>
+              <Pressable onPress={() => handleJoinClub(item.id, item.name)} style={styles.button}>
+                <Text style={styles.buttonText}>Join Club</Text>
+              </Pressable>
+            </View>
+          )}
+        />
+      ) : null}
+
+      {clubsPageTab === "CLUB_FEED" ? (
+        <FlatList
+          data={clubFeed}
+          keyExtractor={(item) => item.postId}
+          contentContainerStyle={styles.list}
+          refreshing={loading}
+          onRefresh={loadData}
+          ListHeaderComponent={
+            <View>
+              <Text style={styles.sectionTitle}>Club Feed</Text>
+              <Text style={styles.hint}>Recent club-related posts and activity.</Text>
+              <Text style={styles.filterLabel}>Filter by Club</Text>
+              <View style={styles.rowWrap}>
+                <Pressable
+                  onPress={() => setClubFeedFilterClubId("")}
+                  style={[styles.pill, clubFeedFilterClubId === "" && styles.pillActive]}
+                >
+                  <Text style={[styles.pillText, clubFeedFilterClubId === "" && styles.pillTextActive]}>All Clubs</Text>
+                </Pressable>
+                {myClubs.slice(0, 20).map((club) => {
+                  const active = clubFeedFilterClubId === club.id;
+                  return (
+                    <Pressable
+                      key={`feed-filter-${club.id}`}
+                      onPress={() => setClubFeedFilterClubId(club.id)}
+                      style={[styles.pill, active && styles.pillActive]}
+                    >
+                      <Text style={[styles.pillText, active && styles.pillTextActive]}>{club.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          }
+          ListEmptyComponent={<Text style={styles.hint}>No club posts yet. Join clubs to see activity.</Text>}
+          renderItem={({ item: post }) => (
+            <View style={styles.card}>
+              <Text style={styles.clubName}>@{post.userId}</Text>
+              <Text>{post.text}</Text>
+            </View>
+          )}
+        />
+      ) : null}
+
+      <Modal
+        visible={discoverCategoryPickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDiscoverCategoryPickerOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, styles.categoryModalCard]}>
+            <Text style={styles.sectionTitle}>Select Category</Text>
+            <TextInput
+              value={discoverCategorySearch}
+              onChangeText={setDiscoverCategorySearch}
+              placeholder="Search categories"
+              style={styles.input}
+            />
+
+            <Pressable
+              onPress={() => {
+                setDiscoverCategoryId("");
+                setDiscoverCategoryPickerOpen(false);
+              }}
+              style={[styles.categoryRow, discoverCategoryId === "" && styles.categoryRowActive]}
+            >
+              <Text style={[styles.categoryRowText, discoverCategoryId === "" && styles.categoryRowTextActive]}>All</Text>
+            </Pressable>
+
+            <FlatList
+              data={discoverModalCategories}
+              keyExtractor={(item) => item.id}
+              style={styles.categoryList}
+              keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={<Text style={styles.hint}>No categories match your search.</Text>}
+              renderItem={({ item }) => {
+                const active = discoverCategoryId === item.id;
+                return (
+                  <Pressable
+                    onPress={() => {
+                      setDiscoverCategoryId(item.id);
+                      setDiscoverCategoryPickerOpen(false);
+                    }}
+                    style={[styles.categoryRow, active && styles.categoryRowActive]}
+                  >
+                    <Text style={[styles.categoryRowText, active && styles.categoryRowTextActive]}>{item.name}</Text>
+                  </Pressable>
+                );
+              }}
+            />
+
+            <Pressable onPress={() => setDiscoverCategoryPickerOpen(false)} style={styles.buttonInline}>
+              <Text style={styles.buttonText}>Close</Text>
+            </Pressable>
           </View>
-        }
-      />
+        </View>
+      </Modal>
 
       <Modal visible={createModalOpen} transparent animationType="fade" onRequestClose={() => setCreateModalOpen(false)}>
         <View style={styles.modalBackdrop}>
@@ -699,12 +766,7 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
           <View style={styles.modalCard}>
             <Text style={styles.sectionTitle}>Modify Club</Text>
             <TextInput value={editClubName} onChangeText={setEditClubName} placeholder="Club title" style={styles.input} />
-            <TextInput
-              value={editClubDescription}
-              onChangeText={setEditClubDescription}
-              placeholder="Description"
-              style={styles.input}
-            />
+            <TextInput value={editClubDescription} onChangeText={setEditClubDescription} placeholder="Description" style={styles.input} />
 
             <View style={styles.rowWrap}>
               <Pressable onPress={() => setEditClubIsPublic(true)} style={[styles.pill, editClubIsPublic && styles.pillActive]}>
@@ -801,6 +863,31 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     maxHeight: "85%"
+  },
+  categoryModalCard: {
+    maxHeight: "80%"
+  },
+  categoryList: {
+    marginBottom: 12
+  },
+  categoryRow: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    marginBottom: 8
+  },
+  categoryRowActive: {
+    backgroundColor: "#111",
+    borderColor: "#111"
+  },
+  categoryRowText: {
+    fontWeight: "600",
+    color: "#222"
+  },
+  categoryRowTextActive: {
+    color: "#fff"
   },
   buttonText: { fontWeight: "600" }
 });

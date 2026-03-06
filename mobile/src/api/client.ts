@@ -135,6 +135,28 @@ export type CommonsFeedResponse = {
   nextCursor?: string;
 };
 
+export type NotificationType =
+  | "POST_COMMENTED"
+  | "POST_REACTED"
+  | "PROJECT_MILESTONE_COMPLETED"
+  | "PROJECT_TASK_COMPLETED"
+  | "PROJECT_CLUB_REQUEST_APPROVED"
+  | "PROJECT_CLUB_REQUEST_REJECTED"
+  | "CLUB_MEMBERSHIP_UPDATED";
+
+export type NotificationItem = {
+  id: string;
+  type: NotificationType;
+  actorId: string;
+  message: string;
+  relatedType: "POST" | "PROJECT" | "CLUB";
+  relatedId: string;
+  postId?: string;
+  projectId?: string;
+  clubId?: string;
+  createdAt: string;
+};
+
 export type ProjectHighlight = {
   id: string;
   projectId: string;
@@ -277,6 +299,36 @@ export async function getCommonsFeed(viewerId: string, options?: CommonsFeedOpti
   return (payload.items as Post[]) ?? [];
 }
 
+export async function getCommonsFeedEvents(
+  viewerId: string,
+  options?: Omit<CommonsFeedOptions, "mode" | "shape">
+): Promise<FeedEvent[]> {
+  const query = new URLSearchParams();
+  query.set("viewerId", viewerId);
+  query.set("mode", "events");
+  query.set("shape", "events");
+
+  if (options?.cursor) query.set("cursor", options.cursor);
+  if (typeof options?.limit === "number") query.set("limit", String(options.limit));
+  if (options?.source) query.set("source", options.source);
+  if (options?.eventType) query.set("eventType", options.eventType);
+  if (options?.clubId) query.set("clubId", options.clubId);
+  if (options?.projectId) query.set("projectId", options.projectId);
+  if (options?.actorId) query.set("actorId", options.actorId);
+
+  const response = await apiFetch(`/feed/commons?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Commons feed events request failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as FeedEvent[] | CommonsFeedResponse;
+  if (Array.isArray(payload)) {
+    return payload as FeedEvent[];
+  }
+
+  return (payload.items as FeedEvent[]) ?? [];
+}
+
 export async function getClubsFeed(viewerId: string, clubId?: string): Promise<Post[]> {
   const query = new URLSearchParams();
   query.set("viewerId", viewerId);
@@ -292,6 +344,17 @@ export async function getProjectsFeed(viewerId: string): Promise<Post[]> {
   const response = await apiFetch(`/feed/projects?viewerId=${encodeURIComponent(viewerId)}`);
   if (!response.ok) {
     throw new Error(`Projects feed request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getNotifications(viewerId: string, limit = 80): Promise<NotificationItem[]> {
+  const query = new URLSearchParams();
+  query.set("viewerId", viewerId);
+  query.set("limit", String(limit));
+  const response = await apiFetch(`/notifications?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Notifications request failed: ${response.status}`);
   }
   return response.json();
 }

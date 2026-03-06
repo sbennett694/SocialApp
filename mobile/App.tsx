@@ -1,19 +1,28 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
-import { getUsers, searchGlobal, GlobalSearchResult, UserBasic } from "./src/api/client";
+import {
+  getNotifications,
+  getUsers,
+  searchGlobal,
+  GlobalSearchResult,
+  NotificationItem,
+  UserBasic
+} from "./src/api/client";
 import { getCurrentUser, getMockUsers } from "./src/auth/session";
 import { ClubsScreen } from "./src/screens/ClubsScreen";
 import { FeedScreen } from "./src/screens/FeedScreen";
+import { HomeScreen } from "./src/screens/HomeScreen";
+import { NotificationsScreen } from "./src/screens/NotificationsScreen";
 import { ProfileScreen } from "./src/screens/ProfileScreen";
 import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 
-type MainTab = "COMMONS" | "CLUBS" | "PROJECTS" | "PROFILE";
+type MainTab = "HOME" | "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS" | "PROFILE";
 
 export default function App() {
   const mockUsers = getMockUsers();
   const [selectedMockUserId, setSelectedMockUserId] = useState(mockUsers[0].userId);
-  const [activeTab, setActiveTab] = useState<MainTab>("COMMONS");
+  const [activeTab, setActiveTab] = useState<MainTab>("HOME");
   const [clubsRootResetSignal, setClubsRootResetSignal] = useState(0);
   const [users, setUsers] = useState<UserBasic[]>([]);
   const [profileFocusUserId, setProfileFocusUserId] = useState<string | undefined>(undefined);
@@ -22,8 +31,13 @@ export default function App() {
   const [searchSuggestions, setSearchSuggestions] = useState<GlobalSearchResult>({ users: [], clubs: [], projects: [] });
   const [searchResults, setSearchResults] = useState<GlobalSearchResult>({ users: [], clubs: [], projects: [] });
   const [searchExecuted, setSearchExecuted] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsMessage, setNotificationsMessage] = useState<string | null>(null);
+  const [notificationReadIds, setNotificationReadIds] = useState<Record<string, true>>({});
 
   const user = getCurrentUser(selectedMockUserId);
+  const unreadNotificationsCount = notifications.filter((item) => !notificationReadIds[item.id]).length;
 
   useEffect(() => {
     getUsers()
@@ -63,6 +77,25 @@ export default function App() {
     };
   }, [searchQuery]);
 
+  async function loadNotifications() {
+    setNotificationsLoading(true);
+    setNotificationsMessage(null);
+    try {
+      const data = await getNotifications(user.userId, 100);
+      setNotifications(data);
+    } catch (err) {
+      setNotificationsMessage((err as Error).message);
+      setNotifications([]);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    setNotificationReadIds({});
+    loadNotifications();
+  }, [user.userId]);
+
   async function executeSearch() {
     const query = searchQuery.trim();
     if (!query) {
@@ -96,6 +129,28 @@ export default function App() {
     setSearchOpen(false);
   }
 
+  function handleOpenNotification(item: NotificationItem) {
+    if (item.relatedType === "PROJECT") {
+      setActiveTab("PROJECTS");
+      return;
+    }
+
+    if (item.relatedType === "CLUB") {
+      setActiveTab("CLUBS");
+      return;
+    }
+
+    setActiveTab("COMMONS");
+  }
+
+  function markNotificationRead(notificationId: string) {
+    setNotificationReadIds((prev) => ({ ...prev, [notificationId]: true }));
+  }
+
+  function handleHomeNavigate(target: "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS") {
+    setActiveTab(target);
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -117,16 +172,21 @@ export default function App() {
       </View>
 
       <View style={styles.navRow}>
-        <View style={styles.brandItem}>
+        <Pressable
+          onPress={() => setActiveTab("HOME")}
+          style={[styles.brandItem, activeTab === "HOME" && styles.brandItemActive]}
+        >
           <Text style={styles.brandText}>SocialApp</Text>
-        </View>
+        </Pressable>
         {([
           ["COMMONS", "Commons"],
           ["CLUBS", "Clubs"],
           ["PROJECTS", "Projects"],
-          ["PROFILE", "Profile"]
+          ["PROFILE", "Profile"],
+          ["NOTIFICATIONS", "Notifications"]
         ] as [MainTab, string][]).map(([tab, label]) => {
           const active = activeTab === tab;
+          const showBadge = tab === "NOTIFICATIONS" && unreadNotificationsCount > 0;
           return (
             <Pressable
               key={tab}
@@ -138,7 +198,20 @@ export default function App() {
               }}
               style={[styles.navItem, active && styles.navItemActive]}
             >
-              <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
+              <View style={styles.navTextRow}>
+                {tab === "NOTIFICATIONS" ? (
+                  <Text style={[styles.navIconText, active && styles.navIconTextActive]}>🔔</Text>
+                ) : (
+                  <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
+                )}
+                {showBadge ? (
+                  <View style={[styles.badge, active && styles.badgeActive]}>
+                    <Text style={[styles.badgeText, active && styles.badgeTextActive]}>
+                      {unreadNotificationsCount > 99 ? "99+" : String(unreadNotificationsCount)}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             </Pressable>
           );
         })}
@@ -245,8 +318,30 @@ export default function App() {
         </View>
       ) : null}
 
+      {activeTab === "HOME" ? (
+        <HomeScreen
+          user={user}
+          notifications={notifications}
+          notificationReadIds={notificationReadIds}
+          notificationsLoading={notificationsLoading}
+          onRefreshNotifications={loadNotifications}
+          onMarkNotificationRead={markNotificationRead}
+          onNavigate={handleHomeNavigate}
+        />
+      ) : null}
       {activeTab === "COMMONS" ? (
         <FeedScreen user={user} />
+      ) : null}
+      {activeTab === "NOTIFICATIONS" ? (
+        <NotificationsScreen
+          notifications={notifications}
+          loading={notificationsLoading}
+          message={notificationsMessage}
+          onRefresh={loadNotifications}
+          readIds={notificationReadIds}
+          onMarkRead={markNotificationRead}
+          onOpenNotification={handleOpenNotification}
+        />
       ) : null}
       {activeTab === "CLUBS" ? <ClubsScreen user={user} rootResetSignal={clubsRootResetSignal} /> : null}
       {activeTab === "PROJECTS" ? <ProjectsScreen user={user} /> : null}
@@ -312,6 +407,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     backgroundColor: "#111"
   },
+  brandItemActive: {
+    opacity: 0.88
+  },
   brandText: {
     fontSize: 12,
     fontWeight: "700",
@@ -333,8 +431,40 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#333"
   },
+  navTextRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6
+  },
   navTextActive: {
     color: "#fff"
+  },
+  navIconText: {
+    fontSize: 14,
+    color: "#333"
+  },
+  navIconTextActive: {
+    color: "#fff"
+  },
+  badge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#d93025",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4
+  },
+  badgeActive: {
+    backgroundColor: "#fff"
+  },
+  badgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "700"
+  },
+  badgeTextActive: {
+    color: "#111"
   },
   searchBox: {
     paddingHorizontal: 16,

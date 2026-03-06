@@ -26,6 +26,8 @@ import {
   ProjectHighlight,
   ProjectMilestone,
   ProjectMilestoneTask,
+  resetStoreToDefault,
+  seedStoreWithDemoData,
   store
 } from "../../repositories/store";
 import {
@@ -39,6 +41,29 @@ import { feedEventService } from "../../services/feedEventService";
 import { feedQueryService } from "../../services/feedQueryService";
 
 const router = Router();
+
+function isDevSeedRoutesEnabled(): boolean {
+  if (process.env.SOCIALAPP_ENABLE_DEV_SEED_ROUTES === "false") return false;
+  return process.env.NODE_ENV !== "production";
+}
+
+function buildSeedSummary() {
+  return {
+    users: store.users.length,
+    follows: store.follows.length,
+    closeCircleInvites: store.closeCircleInvites.length,
+    clubs: store.clubs.length,
+    clubMembers: store.clubMembers.length,
+    projects: store.projects.length,
+    projectClubLinks: store.projectClubLinks.length,
+    milestones: store.projectMilestones.length,
+    highlights: store.projectHighlights.length,
+    posts: store.posts.length,
+    comments: store.comments.length,
+    reactions: store.reactions.length,
+    feedEvents: store.feedEvents.length
+  };
+}
 
 const {
   users,
@@ -189,6 +214,24 @@ function isViewerProjectScoped(viewerId: string, projectId?: string): boolean {
 
 router.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+router.post("/dev/reset-data", (_req, res) => {
+  if (!isDevSeedRoutesEnabled()) {
+    return res.status(404).json({ message: "Not found." });
+  }
+
+  resetStoreToDefault();
+  return res.json({ ok: true, mode: "default", summary: buildSeedSummary() });
+});
+
+router.post("/dev/seed-demo-data", (_req, res) => {
+  if (!isDevSeedRoutesEnabled()) {
+    return res.status(404).json({ message: "Not found." });
+  }
+
+  seedStoreWithDemoData();
+  return res.json({ ok: true, mode: "demo", summary: buildSeedSummary() });
 });
 
 router.get("/categories", (_req, res) => {
@@ -587,6 +630,143 @@ router.get("/feed/projects", (req, res) => {
   const projectIds = projects.filter((p) => p.ownerId === viewerId).map((p) => p.id);
   const projectPosts = posts.filter((p) => !!p.projectId && projectIds.includes(p.projectId));
   res.json(projectPosts);
+});
+
+router.get("/notifications", (req, res) => {
+  const viewerId = String(req.query.viewerId ?? "").trim();
+  const limitRaw = req.query.limit ? Number(req.query.limit) : 80;
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 80;
+
+  if (!viewerId) {
+    return res.status(400).json({ message: "viewerId is required." });
+  }
+
+  const viewerPostIds = new Set(posts.filter((post) => post.userId === viewerId).map((post) => post.postId));
+  const viewerProjectIds = new Set(projects.filter((project) => project.ownerId === viewerId).map((project) => project.id));
+
+  const notificationItems: Array<{
+    id: string;
+    type:
+      | "POST_COMMENTED"
+      | "POST_REACTED"
+      | "PROJECT_MILESTONE_COMPLETED"
+      | "PROJECT_TASK_COMPLETED"
+      | "PROJECT_CLUB_REQUEST_APPROVED"
+      | "PROJECT_CLUB_REQUEST_REJECTED"
+      | "CLUB_MEMBERSHIP_UPDATED";
+    actorId: string;
+    message: string;
+    relatedType: "POST" | "PROJECT" | "CLUB";
+    relatedId: string;
+    postId?: string;
+    projectId?: string;
+    clubId?: string;
+    createdAt: string;
+  }> = [];
+
+  comments
+    .filter((comment) => viewerPostIds.has(comment.postId) && comment.authorId !== viewerId)
+    .forEach((comment) => {
+      notificationItems.push({
+        id: `comment:${comment.id}`,
+        type: "POST_COMMENTED",
+        actorId: comment.authorId,
+        message: `@${comment.authorId} commented on your post`,
+        relatedType: "POST",
+        relatedId: comment.postId,
+        postId: comment.postId,
+        createdAt: comment.createdAt
+      });
+    });
+
+  reactions
+    .filter((reaction) => viewerPostIds.has(reaction.postId) && reaction.userId !== viewerId)
+    .forEach((reaction) => {
+      notificationItems.push({
+        id: `reaction:${reaction.postId}:${reaction.userId}:${reaction.createdAt}`,
+        type: "POST_REACTED",
+        actorId: reaction.userId,
+        message: `@${reaction.userId} reacted to your post`,
+        relatedType: "POST",
+        relatedId: reaction.postId,
+        postId: reaction.postId,
+        createdAt: reaction.createdAt
+      });
+    });
+
+  store.feedEvents
+    .filter(
+      (event) =>
+        (event.eventType === "MILESTONE_COMPLETED" || event.eventType === "TASK_COMPLETED") &&
+        !!event.projectId &&
+        viewerProjectIds.has(event.projectId) &&
+        event.actorId !== viewerId
+    )
+    .forEach((event) => {
+      const project = event.projectId ? projects.find((entry) => entry.id === event.projectId) : undefined;
+      const projectTitle = project?.title ?? "your project";
+
+      notificationItems.push({
+        id: `project-progress:${event.id}`,
+        type: event.eventType === "MILESTONE_COMPLETED" ? "PROJECT_MILESTONE_COMPLETED" : "PROJECT_TASK_COMPLETED",
+        actorId: event.actorId,
+        message:
+          event.eventType === "MILESTONE_COMPLETED"
+            ? `@${event.actorId} completed a milestone in ${projectTitle}`
+            : `@${event.actorId} completed a task in ${projectTitle}`,
+        relatedType: "PROJECT",
+        relatedId: event.projectId ?? event.entityId,
+        projectId: event.projectId,
+        clubId: event.clubId,
+        createdAt: event.sortTimestamp
+      });
+    });
+
+  projectClubLinks
+    .filter((link) => link.requestedBy === viewerId && (link.status === "APPROVED" || link.status === "REJECTED"))
+    .forEach((link) => {
+      const club = clubs.find((entry) => entry.id === link.clubId);
+      const project = projects.find((entry) => entry.id === link.projectId);
+      const clubName = club?.name ?? "club";
+      const projectTitle = project?.title ?? "project";
+      notificationItems.push({
+        id: `project-club-link:${link.projectId}:${link.clubId}:${link.status}:${link.createdAt}`,
+        type: link.status === "APPROVED" ? "PROJECT_CLUB_REQUEST_APPROVED" : "PROJECT_CLUB_REQUEST_REJECTED",
+        actorId: club?.ownerId ?? "club-admin",
+        message:
+          link.status === "APPROVED"
+            ? `Your project ${projectTitle} was approved to join ${clubName}`
+            : `Your project ${projectTitle} was rejected by ${clubName}`,
+        relatedType: "PROJECT",
+        relatedId: link.projectId,
+        projectId: link.projectId,
+        clubId: link.clubId,
+        createdAt: link.createdAt
+      });
+    });
+
+  clubMembers
+    .filter((member) => member.userId === viewerId)
+    .forEach((member) => {
+      const club = clubs.find((entry) => entry.id === member.clubId);
+      if (!club) return;
+      notificationItems.push({
+        id: `club-membership:${member.clubId}:${member.userId}:${member.role}:${member.createdAt}`,
+        type: "CLUB_MEMBERSHIP_UPDATED",
+        actorId: club.ownerId,
+        message: `Your role in ${club.name} is ${member.role}`,
+        relatedType: "CLUB",
+        relatedId: member.clubId,
+        clubId: member.clubId,
+        createdAt: member.createdAt
+      });
+    });
+
+  const sorted = notificationItems
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+    .slice(0, limit);
+
+  return res.json(sorted);
 });
 
 router.get("/clubs", (_req, res) => {
