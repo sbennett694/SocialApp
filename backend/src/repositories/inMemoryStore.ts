@@ -14,6 +14,7 @@ import {
   Visibility
 } from "../domain/types";
 import { FeedEvent } from "../domain/feedEvent";
+import { ClubHistoryEvent } from "../domain/clubHistory";
 
 export type LocalPost = {
   postId: string;
@@ -93,6 +94,7 @@ export const store = {
   reports: [] as Report[],
   moderationActions: [] as ModerationAction[],
   feedEvents: [] as FeedEvent[],
+  clubHistoryEvents: [] as ClubHistoryEvent[],
   mutedPairs: new Set<string>(),
   blockedPairs: new Set<string>(),
   posts: [] as LocalPost[]
@@ -113,6 +115,7 @@ export function resetStoreToDefault() {
   clearArray(store.reports);
   clearArray(store.moderationActions);
   clearArray(store.feedEvents);
+  clearArray(store.clubHistoryEvents);
   clearArray(store.posts);
   store.mutedPairs.clear();
   store.blockedPairs.clear();
@@ -161,6 +164,7 @@ export function seedStoreWithDemoData() {
     id: "club-woodworking-lab",
     categoryId: "woodworking",
     name: "Weekend Woodworking Lab",
+    founderId: "alex",
     ownerId: "alex",
     isPublic: true,
     description: "Build logs, shop tips, and progress updates.",
@@ -171,6 +175,7 @@ export function seedStoreWithDemoData() {
     id: "club-city-photo-walk",
     categoryId: "photography",
     name: "City Photo Walk",
+    founderId: "jamie",
     ownerId: "jamie",
     isPublic: true,
     description: "Street and nature photo challenges.",
@@ -181,6 +186,7 @@ export function seedStoreWithDemoData() {
     id: "club-homelab-night",
     categoryId: "homelab",
     name: "Homelab Night Shift",
+    founderId: "taylor",
     ownerId: "taylor",
     isPublic: false,
     description: "Private infra tinkering and setup notes.",

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { ClubMember, PostTag, Project, Visibility } from "../domain/types";
+import { Club, ClubMember, PostTag, Project, Visibility } from "../domain/types";
 import { store } from "../repositories/store";
 
 export function relationKey(viewerId: string, targetId: string): string {
@@ -18,6 +18,69 @@ export function canManageClub(clubId: string, userId: string): boolean {
 export function canManageProject(project: Project, actorId: string): boolean {
   if (project.clubId) return canManageClub(project.clubId, actorId);
   return project.ownerId === actorId || project.createdBy === actorId;
+}
+
+export function assertFounderImmutable(club: Club, proposedFounderId: string | undefined) {
+  if (proposedFounderId !== undefined && proposedFounderId !== club.founderId) {
+    throw new Error("Founder identity is immutable and cannot be changed.");
+  }
+}
+
+export function assertClubHasExactlyOneOwner(clubId: string) {
+  const ownerMemberships = store.clubMembers.filter((member) => member.clubId === clubId && member.role === "OWNER");
+  if (ownerMemberships.length !== 1) {
+    throw new Error("Club must have exactly one owner membership.");
+  }
+
+  const club = store.clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    throw new Error("Club not found.");
+  }
+
+  const ownerMembership = ownerMemberships[0];
+  if (club.ownerId !== ownerMembership.userId) {
+    throw new Error("Club ownerId must match the single OWNER club membership.");
+  }
+}
+
+export function transferClubOwnershipAtomic(input: {
+  clubId: string;
+  actorId: string;
+  newOwnerId: string;
+  previousOwnerFallbackRole: Exclude<ClubMember["role"], "OWNER">;
+}) {
+  const { clubId, actorId, newOwnerId, previousOwnerFallbackRole } = input;
+  const club = store.clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    throw new Error("Club not found.");
+  }
+
+  if (club.ownerId !== actorId) {
+    throw new Error("Only current owner can transfer ownership.");
+  }
+
+  if (newOwnerId === club.ownerId) {
+    throw new Error("New owner must differ from current owner.");
+  }
+
+  const currentOwnerMembership = store.clubMembers.find(
+    (member) => member.clubId === clubId && member.userId === club.ownerId
+  );
+  const nextOwnerMembership = store.clubMembers.find(
+    (member) => member.clubId === clubId && member.userId === newOwnerId
+  );
+
+  if (!currentOwnerMembership || !nextOwnerMembership) {
+    throw new Error("Both current and next owner must be club members.");
+  }
+
+  // Apply as a single service operation after pre-validation.
+  currentOwnerMembership.role = previousOwnerFallbackRole;
+  nextOwnerMembership.role = "OWNER";
+  club.ownerId = newOwnerId;
+
+  assertFounderImmutable(club, club.founderId);
+  assertClubHasExactlyOneOwner(clubId);
 }
 
 export function getProjectMilestonesOrdered(projectId: string) {

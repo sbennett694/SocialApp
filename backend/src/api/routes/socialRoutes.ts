@@ -31,6 +31,8 @@ import {
   store
 } from "../../repositories/store";
 import {
+  assertClubHasExactlyOneOwner,
+  assertFounderImmutable,
   canManageClub,
   canManageProject,
   getProjectMilestonesOrdered,
@@ -39,6 +41,7 @@ import {
 } from "../../services/socialService";
 import { feedEventService } from "../../services/feedEventService";
 import { feedQueryService } from "../../services/feedQueryService";
+import { clubHistoryRepository } from "../../repositories/clubHistoryRepository";
 
 const router = Router();
 
@@ -61,7 +64,8 @@ function buildSeedSummary() {
     posts: store.posts.length,
     comments: store.comments.length,
     reactions: store.reactions.length,
-    feedEvents: store.feedEvents.length
+    feedEvents: store.feedEvents.length,
+    clubHistoryEvents: store.clubHistoryEvents.length
   };
 }
 
@@ -830,6 +834,7 @@ router.post("/clubs", (req, res) => {
     id: uuidv4(),
     categoryId,
     name,
+    founderId: ownerId,
     ownerId,
     isPublic,
     description,
@@ -842,6 +847,44 @@ router.post("/clubs", (req, res) => {
     userId: ownerId,
     role: "OWNER",
     createdAt: new Date().toISOString()
+  });
+
+  try {
+    assertClubHasExactlyOneOwner(club.id);
+  } catch (error) {
+    clubs.splice(clubs.findIndex((entry) => entry.id === club.id), 1);
+    const ownerMembershipIndex = clubMembers.findIndex(
+      (member) => member.clubId === club.id && member.userId === ownerId && member.role === "OWNER"
+    );
+    if (ownerMembershipIndex >= 0) {
+      clubMembers.splice(ownerMembershipIndex, 1);
+    }
+    return res.status(500).json({ message: error instanceof Error ? error.message : "Failed to create club." });
+  }
+
+  clubHistoryRepository.append({
+    clubId: club.id,
+    eventType: "CLUB_CREATED",
+    actorId: ownerId,
+    subjectUserId: ownerId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      founderId: club.founderId,
+      ownerId: club.ownerId
+    },
+    createdAt: club.createdAt
+  });
+
+  clubHistoryRepository.append({
+    clubId: club.id,
+    eventType: "FOUNDER_RECORDED",
+    actorId: ownerId,
+    subjectUserId: ownerId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      founderId: club.founderId
+    },
+    createdAt: club.createdAt
   });
 
   publishActivityPost({
@@ -869,6 +912,13 @@ router.patch("/clubs/:clubId", (req, res) => {
 
   if (!viewerId || club.ownerId !== viewerId) {
     return res.status(403).json({ message: "Only the club owner can modify club information." });
+  }
+
+  const proposedFounderId = req.body?.founderId !== undefined ? String(req.body.founderId) : undefined;
+  try {
+    assertFounderImmutable(club, proposedFounderId);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid founder update." });
   }
 
   if (name) {
@@ -960,6 +1010,14 @@ router.patch("/clubs/:clubId/members/:memberId/role", (req, res) => {
   }
 
   membership.role = role;
+
+  try {
+    assertFounderImmutable(club, req.body?.founderId !== undefined ? String(req.body.founderId) : undefined);
+    assertClubHasExactlyOneOwner(club.id);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : "Club governance invariant failed." });
+  }
+
   return res.json(membership);
 });
 

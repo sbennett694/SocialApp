@@ -1,6 +1,6 @@
 # Architecture
 
-**Last Updated:** 2026-03-06 (America/Los_Angeles)
+**Last Updated:** 2026-03-07 (America/Los_Angeles)
 
 This document is the architecture source of truth for SocialApp. Future tasks should use it as the first context file before making structural changes.
 
@@ -40,7 +40,7 @@ Top-level app structure (`mobile/App.tsx`):
 - **Clubs**: 3-tab clubs hub (`My Clubs`, `Discover`, `Club Feed`) plus per-club detail tabs (`Highlights`, `Members`, `Projects`, `Project Requests` for owner/admin)
 - **Projects**: project detail, milestones, tasks, highlights, project-club links
 - **Notifications**: personalized notifications list for viewer-relevant activity
-- **Profile**: user profile content tabs + network management
+- **Profile**: user profile content tabs + unified **All** view (aggregated Commons + Projects + Clubs) + network management kept separate
 - **Search**: nav action opens search UI; supports live suggestions and explicit Find/Enter execution
 
 Current nav row pattern: **SocialApp (Home) | Commons | Clubs | Projects | Profile | Search | Notifications (bell icon + unread badge)**
@@ -105,7 +105,7 @@ Important entities (architecture-level):
 - **Follow**: followerId -> followeeId, createdAt
 - **CloseCircleInvite**: inviter/invitee/status lifecycle
 - **Category**: allowed hobby taxonomy (`allowedCategories`)
-- **Club**: id, categoryId, ownerId, visibility/public flag, metadata
+- **Club**: id, categoryId, founderId (immutable), ownerId (active), visibility/public flag, metadata
 - **ClubMember**: clubId/userId/role (MEMBER|MODERATOR|OWNER)
 - **Project**: ownerId, categoryId, title/description, optional clubId/createdBy
 - **ProjectClubLink** (local runtime model): project-to-multi-club association with approval state
@@ -115,6 +115,7 @@ Important entities (architecture-level):
 - **Report**: reporter + target + reason + status
 - **ModerationAction**: action log over post/comment/user targets
 - **FeedEvent**: Commons activity projection entity keyed by source entity references and visibility context
+- **ClubHistoryEvent**: club governance timeline entity with per-club sequence ordering
 
 ## API / Service Layer
 Primary local service is Express with modular composition:
@@ -126,6 +127,7 @@ Primary local service is Express with modular composition:
 - `backend/src/repositories/store.ts` selects repository mode abstraction
 - `backend/src/repositories/inMemoryStore.ts` owns in-memory persistence state
 - `backend/src/repositories/feedEventRepository.ts` provides FeedEvent query paths/index-like accessors
+- `backend/src/repositories/clubHistoryRepository.ts` appends and queries per-club governance history with monotonic sequence
 - `backend/src/localServer.ts` is now a thin bootstrap wrapper calling `startServer()`
 
 High-value route groups:
@@ -145,6 +147,7 @@ Notes:
 - endpoint URLs and behavior were preserved during modular extraction
 - repository mode abstraction keeps current in-memory behavior while preparing for `file`/`sqlite` and future `dynamodb` adapters
 - Commons migration path is dual-read: `/feed/commons` defaults to legacy posts; `mode=events` enables FeedEvent-based response with optional `shape=legacy` adaptation for existing UI safety.
+- Club creation now records governance history baseline events (`CLUB_CREATED`, `FOUNDER_RECORDED`) in ClubHistory.
 
 ### Backend Source Structure (Current)
 ```text
@@ -166,6 +169,7 @@ backend/src/
   middleware/
     notFound.ts
   domain/
+    clubHistory.ts
     policy.ts
     feedEvent.ts
     seedData.ts
@@ -183,13 +187,20 @@ backend/src/
 - `mobile/App.tsx`: top-level nav, dev user switcher, global search UI, and shared notifications unread state/badge wiring
 - `mobile/src/screens/HomeScreen.tsx`: dashboard-style home surface composed from existing endpoints with capped sections and pull-to-refresh
 - `mobile/src/api/client.ts`: typed API client and route wrappers
-- `mobile/src/screens/FeedScreen.tsx`: event-backed commons activity cards + composer + threaded responses for post-backed events + lightweight feed-type filter bar (All/Posts/Projects/Progress)
+- `mobile/src/screens/FeedScreen.tsx`: event-backed commons activity cards + composer + threaded responses for post-backed events + lightweight feed-type filter bar (All/Posts/Projects/Progress), including tile press routing hints (project/club/post context) and response toggle counts/expand-collapse behavior
 - `mobile/src/screens/NotificationsScreen.tsx`: personalized notifications list with lightweight unread/read visual state and tap-through routing to relevant tab
 - `mobile/src/screens/ClubsScreen.tsx`: clubs 3-tab hub + club detail management flows (membership roles, highlight posting, project request review)
 - `mobile/src/screens/ProjectsScreen.tsx`: project detail and workflow UIs
-- `mobile/src/screens/ProfileScreen.tsx`: profile content tabs + network management
+- `mobile/src/components/CategorySelectorField.tsx`: shared searchable category selector used by create modals (club/project)
+- `mobile/src/screens/ProfileScreen.tsx`: profile content tabs + unified All content aggregator (Commons/Projects/Clubs) with Network management remaining separate
 - `mobile/src/auth/session.ts`: mock user/session helpers
 - `mobile/src/config.ts`: environment-driven client config
+
+Create Club and Create Project modal UX now uses a shared mobile-friendly pattern:
+- searchable category selector instead of always-visible large chip grid
+- scrollable modal body for long content/category lists
+- overlay tap-to-dismiss behavior while preserving in-modal interactions
+- lightweight Suggested Categories section in the shared selector (selected + session recents + associated categories + fallback defaults)
 
 ## State Management
 - No Redux/Zustand/global store currently.
@@ -257,7 +268,7 @@ These routes are intended for local/development use and are disabled when `NODE_
 - Local backend uses in-memory state (non-persistent).
 - Serverless handlers and local Express runtime are not yet fully unified.
 - Auth is mock-first; Cognito not wired as active runtime path.
-- Search currently routes to major tabs/profile focus, not deep-linked object detail pages.
+- Search/notification/home/feed/profile surfaces now route into tab detail context for project/club targets using focus-id navigation props; deep-linking to arbitrary nested entities beyond current tab detail views remains limited.
 - Commons activity/event model now has event-type card rendering in mobile; deeper metadata-driven card payloads remain a future enhancement.
 - Web/iOS deployment paths are planned but not yet fully productized.
 
@@ -280,3 +291,11 @@ These routes are intended for local/development use and are disabled when `NODE_
   - folder structure
   - major UI flow
 - Do **not** update this doc for tiny cosmetic-only changes unless they alter behavior/structure.
+
+## Dev Workflow Helpers (Windows)
+- Root-level scripts now provide local orchestration for backend + mobile dev startup:
+  - `npm run dev:launch` → launches backend local API + Expo dev server in separate windows; skips duplicate backend launch if port `3001` is already occupied and uses PID-file tracking to avoid duplicate frontend launches
+  - `npm run dev:relaunch` → stops workflow-managed backend/mobile PIDs, performs fallback titled-window cleanup, frees backend/mobile dev ports (`3001`, `8081`) if needed, then relaunches both
+- Optional reseed relaunch helper:
+  - `scripts\\dev-relaunch.cmd -Reseed`
+- Backend launch still uses `backend` `local-api` script (`build` before run) to reduce stale compiled runtime mismatches during iterative development.

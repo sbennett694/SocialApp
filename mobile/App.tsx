@@ -18,6 +18,7 @@ import { ProfileScreen } from "./src/screens/ProfileScreen";
 import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 
 type MainTab = "HOME" | "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS" | "PROFILE";
+type DetailNavigationTarget = "CLUBS" | "PROJECTS";
 
 export default function App() {
   const mockUsers = getMockUsers();
@@ -26,6 +27,8 @@ export default function App() {
   const [clubsRootResetSignal, setClubsRootResetSignal] = useState(0);
   const [users, setUsers] = useState<UserBasic[]>([]);
   const [profileFocusUserId, setProfileFocusUserId] = useState<string | undefined>(undefined);
+  const [clubsFocusClubId, setClubsFocusClubId] = useState<string | undefined>(undefined);
+  const [projectsFocusProjectId, setProjectsFocusProjectId] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSuggestions, setSearchSuggestions] = useState<GlobalSearchResult>({ users: [], clubs: [], projects: [] });
@@ -122,8 +125,10 @@ export default function App() {
       setProfileFocusUserId(id);
       setActiveTab("PROFILE");
     } else if (type === "CLUB") {
+      setClubsFocusClubId(id);
       setActiveTab("CLUBS");
     } else {
+      setProjectsFocusProjectId(id);
       setActiveTab("PROJECTS");
     }
     setSearchOpen(false);
@@ -131,11 +136,13 @@ export default function App() {
 
   function handleOpenNotification(item: NotificationItem) {
     if (item.relatedType === "PROJECT") {
+      setProjectsFocusProjectId(item.projectId ?? item.relatedId);
       setActiveTab("PROJECTS");
       return;
     }
 
     if (item.relatedType === "CLUB") {
+      setClubsFocusClubId(item.clubId ?? item.relatedId);
       setActiveTab("CLUBS");
       return;
     }
@@ -147,7 +154,33 @@ export default function App() {
     setNotificationReadIds((prev) => ({ ...prev, [notificationId]: true }));
   }
 
-  function handleHomeNavigate(target: "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS") {
+  function handleOpenDetailTarget(target: DetailNavigationTarget, id?: string) {
+    if (target === "PROJECTS") {
+      if (id) setProjectsFocusProjectId(id);
+      setActiveTab("PROJECTS");
+      return;
+    }
+
+    if (id) setClubsFocusClubId(id);
+    setActiveTab("CLUBS");
+  }
+
+  function handleHomeNavigate(
+    target: "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS",
+    options?: { projectId?: string; clubId?: string }
+  ) {
+    if (target === "PROJECTS") {
+      if (options?.projectId) setProjectsFocusProjectId(options.projectId);
+      setActiveTab("PROJECTS");
+      return;
+    }
+
+    if (target === "CLUBS") {
+      if (options?.clubId) setClubsFocusClubId(options.clubId);
+      setActiveTab("CLUBS");
+      return;
+    }
+
     setActiveTab(target);
   }
 
@@ -330,7 +363,12 @@ export default function App() {
         />
       ) : null}
       {activeTab === "COMMONS" ? (
-        <FeedScreen user={user} />
+        <FeedScreen
+          user={user}
+          onNavigate={(target, id) => {
+            handleOpenDetailTarget(target, id);
+          }}
+        />
       ) : null}
       {activeTab === "NOTIFICATIONS" ? (
         <NotificationsScreen
@@ -343,9 +381,37 @@ export default function App() {
           onOpenNotification={handleOpenNotification}
         />
       ) : null}
-      {activeTab === "CLUBS" ? <ClubsScreen user={user} rootResetSignal={clubsRootResetSignal} /> : null}
-      {activeTab === "PROJECTS" ? <ProjectsScreen user={user} /> : null}
-      {activeTab === "PROFILE" ? <ProfileScreen user={user} users={users} focusUserId={profileFocusUserId} /> : null}
+      {activeTab === "CLUBS" ? (
+        <ClubsScreen
+          user={user}
+          rootResetSignal={clubsRootResetSignal}
+          focusClubId={clubsFocusClubId}
+          onNavigateToProject={(projectId) => {
+            setProjectsFocusProjectId(projectId);
+            setActiveTab("PROJECTS");
+          }}
+        />
+      ) : null}
+      {activeTab === "PROJECTS" ? (
+        <ProjectsScreen
+          user={user}
+          focusProjectId={projectsFocusProjectId}
+          onNavigateToClub={(clubId) => {
+            setClubsFocusClubId(clubId);
+            setActiveTab("CLUBS");
+          }}
+        />
+      ) : null}
+      {activeTab === "PROFILE" ? (
+        <ProfileScreen
+          user={user}
+          users={users}
+          focusUserId={profileFocusUserId}
+          onNavigateToDetail={(target, id) => {
+            handleOpenDetailTarget(target, id);
+          }}
+        />
+      ) : null}
 
       <StatusBar style="auto" />
     </SafeAreaView>

@@ -28,6 +28,31 @@ Android-first social app built with React Native (Expo) and an AWS serverless ba
    - `npm run build`
    - Local API: `npm run local-api`
 
+## Developer Launch / Relaunch (Windows)
+
+From repo root (`SocialApp/`), you can now launch both backend + mobile together.
+
+- **Launch both:**
+  - `npm run dev:launch`
+  - Starts two terminal windows:
+    - `SocialApp Backend` (backend local API)
+    - `SocialApp Mobile` (Expo dev server)
+  - If backend is already listening on port `3001`, launch skips spawning a duplicate backend process.
+  - Frontend duplicate detection now uses workflow PID tracking (not loose window-title matching), which avoids stale false positives.
+
+- **Relaunch both cleanly:**
+  - `npm run dev:relaunch`
+  - Stops existing backend/mobile processes tracked by the workflow, performs fallback cleanup, ensures backend/mobile dev ports are freed (`3001`, `8081`), then starts fresh backend + mobile.
+
+- **Relaunch and reseed local data (optional):**
+  - `scripts\\dev-relaunch.cmd -Reseed`
+  - Useful when you want a clean runtime plus refreshed demo data.
+
+Notes:
+- These helpers are Windows-focused (`.cmd`) for local dev ergonomics.
+- Backend still starts through `backend`'s `local-api` script (`build` + `node dist/localServer.js`), which helps avoid stale route/runtime mismatch from outdated compiled output.
+- To stop services manually, close the spawned backend/mobile terminal windows.
+
 ## Local-First Development Modes
 - Default mode is local and low-cost.
 - Mobile env variables (`mobile/.env`):

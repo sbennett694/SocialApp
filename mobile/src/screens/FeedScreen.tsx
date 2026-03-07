@@ -33,12 +33,13 @@ import { AuthUser } from "../auth/session";
 const threadLabels: Record<ThreadType, string> = {
   COMMENTS: "Comments",
   QUESTIONS: "Questions",
-  THANK_YOU: "Thank You",
+  THANK_YOU: "Gratitude",
   SUGGESTIONS: "Suggestions"
 };
 
 type CommonsScreenProps = {
   user: AuthUser;
+  onNavigate?: (target: "CLUBS" | "PROJECTS", id?: string) => void;
 };
 
 type CommonsFeedFilter = "ALL" | "POSTS" | "PROJECTS" | "PROGRESS";
@@ -84,7 +85,7 @@ function ActivityCard({
   );
 }
 
-export function FeedScreen({ user }: CommonsScreenProps) {
+export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
   const [events, setEvents] = useState<FeedEvent[]>([]);
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<CommonsFeedFilter>("ALL");
   const [loading, setLoading] = useState(true);
@@ -97,6 +98,7 @@ export function FeedScreen({ user }: CommonsScreenProps) {
   const [activeThreadType, setActiveThreadType] = useState<ThreadType>("COMMENTS");
   const [activeReplyParentId, setActiveReplyParentId] = useState<string | undefined>(undefined);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [threadCountsByPostId, setThreadCountsByPostId] = useState<Record<string, Partial<Record<ThreadType, number>>>>({});
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [commentMessage, setCommentMessage] = useState<string | null>(null);
@@ -204,6 +206,30 @@ export function FeedScreen({ user }: CommonsScreenProps) {
     }
   }
 
+  async function loadThreadCounts(postId: string) {
+    if (threadCountsByPostId[postId]?.COMMENTS !== undefined && threadCountsByPostId[postId]?.THANK_YOU !== undefined) {
+      return;
+    }
+
+    try {
+      const [commentsList, gratitudeList] = await Promise.all([
+        getComments(postId, "COMMENTS"),
+        getComments(postId, "THANK_YOU")
+      ]);
+
+      setThreadCountsByPostId((prev) => ({
+        ...prev,
+        [postId]: {
+          ...prev[postId],
+          COMMENTS: commentsList.length,
+          THANK_YOU: gratitudeList.length
+        }
+      }));
+    } catch {
+      // Non-blocking for feed rendering.
+    }
+  }
+
   async function hydrateEventContext(feedEvents: FeedEvent[]) {
     try {
       const [clubs, projects, posts] = await Promise.all([getClubs(), getProjects(), getFeed(user.userId)]);
@@ -308,6 +334,20 @@ export function FeedScreen({ user }: CommonsScreenProps) {
     }
   }, [events, projectIdsNeedingContext.length]);
 
+  useEffect(() => {
+    const postIds = Array.from(
+      new Set(
+        filteredEvents
+          .filter((event) => event.entityType === "POST")
+          .map((event) => event.entityId)
+      )
+    );
+
+    postIds.forEach((postId) => {
+      void loadThreadCounts(postId);
+    });
+  }, [filteredEvents]);
+
   async function handleCreatePost() {
     if (!newPostText.trim()) {
       setSubmitMessage("Post text is required.");
@@ -335,6 +375,14 @@ export function FeedScreen({ user }: CommonsScreenProps) {
   }
 
   async function handleOpenThread(postId: string, threadType: ThreadType) {
+    if (activePostId === postId && activeThreadType === threadType) {
+      setActivePostId(null);
+      setComments([]);
+      setActiveReplyParentId(undefined);
+      setCommentText("");
+      return;
+    }
+
     setActivePostId(postId);
     setActiveThreadType(threadType);
     setActiveReplyParentId(undefined);
@@ -464,6 +512,29 @@ export function FeedScreen({ user }: CommonsScreenProps) {
     }
   }
 
+  async function handlePressFeedTile(item: FeedDisplayItem) {
+    if (item.kind === "GROUPED_TASK_COMPLETION") {
+      onNavigate?.("PROJECTS", item.projectId);
+      return;
+    }
+
+    const event = item.event;
+
+    if (event.projectId || event.source === "PROJECTS") {
+      onNavigate?.("PROJECTS", event.projectId);
+      return;
+    }
+
+    if (event.clubId || event.source === "CLUBS") {
+      onNavigate?.("CLUBS", event.clubId);
+      return;
+    }
+
+    if (event.entityType === "POST") {
+      await handleOpenThread(event.entityId, "COMMENTS");
+    }
+  }
+
   if (loading) {
     return <ActivityIndicator style={{ marginTop: 40 }} />;
   }
@@ -491,14 +562,16 @@ export function FeedScreen({ user }: CommonsScreenProps) {
               : `${new Date(item.earliestSortTimestamp).toLocaleTimeString()} - ${new Date(item.latestSortTimestamp).toLocaleTimeString()}`;
 
           return (
-            <ActivityCard
-              label="Task Progress"
-              title={`@${item.actorId} completed ${item.count} tasks`}
-              subtitle={`in ${projectName}`}
-              body={taskNames.length > 0 ? `Includes: ${taskNames.join(", ")}${item.count > taskNames.length ? ", ..." : ""}` : undefined}
-              tone="progress"
-              footer={timespanText}
-            />
+            <Pressable onPress={() => void handlePressFeedTile(item)}>
+              <ActivityCard
+                label="Task Progress"
+                title={`@${item.actorId} completed ${item.count} tasks`}
+                subtitle={`in ${projectName}`}
+                body={taskNames.length > 0 ? `Includes: ${taskNames.join(", ")}${item.count > taskNames.length ? ", ..." : ""}` : undefined}
+                tone="progress"
+                footer={timespanText}
+              />
+            </Pressable>
           );
         }
 
@@ -506,7 +579,7 @@ export function FeedScreen({ user }: CommonsScreenProps) {
         const postId = event.entityType === "POST" ? event.entityId : null;
         return (
           <View>
-            {getEventCard(event)}
+            <Pressable onPress={() => void handlePressFeedTile(item)}>{getEventCard(event)}</Pressable>
 
             {postId ? (
               <View style={styles.threadCard}>
@@ -514,6 +587,11 @@ export function FeedScreen({ user }: CommonsScreenProps) {
                 <View style={styles.mockUserButtons}>
                   {(["COMMENTS", "QUESTIONS", "THANK_YOU", "SUGGESTIONS"] as ThreadType[]).map((threadType) => {
                     const active = activePostId === postId && activeThreadType === threadType;
+                    const count = threadCountsByPostId[postId]?.[threadType];
+                    const shouldShowCount = threadType === "COMMENTS" || threadType === "THANK_YOU";
+                    const label = shouldShowCount
+                      ? `${threadLabels[threadType]} (${count ?? 0})`
+                      : threadLabels[threadType];
                     return (
                       <Pressable
                         key={`${item.id}-${threadType}`}
@@ -521,7 +599,7 @@ export function FeedScreen({ user }: CommonsScreenProps) {
                         style={[styles.userButton, active && styles.userButtonActive]}
                       >
                         <Text style={[styles.userButtonText, active && styles.userButtonTextActive]}>
-                          {threadLabels[threadType]}
+                          {label}
                         </Text>
                       </Pressable>
                     );

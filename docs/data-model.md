@@ -37,7 +37,9 @@ User 1---* CloseCircleInvite (as inviter)
 User 1---* CloseCircleInvite (as invitee)
 
 User 1---* Club (as owner)
+User 1---* Club (as founder, immutable historical identity)
 Club 1---* ClubMember *---1 User
+Club 1---* ClubHistoryEvent
 
 User 1---* Project (as owner/creator)
 Project *---* Club (via ProjectClubLink)
@@ -93,7 +95,7 @@ ModerationAction *---1 (target: User | Post | Comment)
 
 ### Club
 - **Purpose:** Hobby/community grouping with ownership and membership roles.
-- **Key fields:** `id`, `categoryId`, `name`, `ownerId`, `isPublic`, `description`, `createdAt`.
+- **Key fields:** `id`, `categoryId`, `name`, `founderId` (immutable), `ownerId` (active), `isPublic`, `description`, `createdAt`.
 - **Relationships:**
   - Belongs to one `Category`
   - Owned by one `User`
@@ -101,6 +103,8 @@ ModerationAction *---1 (target: User | Post | Comment)
   - Linked to `Project` through `ProjectClubLink`
   - May scope `Post` visibility/content
 - **Important constraints/rules:** Membership and role checks (`OWNER`, `MODERATOR`, `MEMBER`) drive admin actions, posting, and joins.
+  - `founderId` is immutable historical identity.
+  - Club must have exactly one active owner.
 
 ### ClubMember
 - **Purpose:** Membership bridge between users and clubs, with role metadata.
@@ -191,3 +195,11 @@ ModerationAction *---1 (target: User | Post | Comment)
     - follow and close-circle actor relationships
     - club membership (`ClubMember`)
     - project scope via existing fields/links (`Project.ownerId`, `Project.createdBy`, optional `Project.clubId`, approved `ProjectClubLink` + club membership)
+
+### ClubHistoryEvent
+- **Purpose:** Club-scoped governance timeline (separate from Commons `FeedEvent`).
+- **Key fields:** `id`, `clubId`, `sequence`, `eventType`, `actorId?`, `subjectUserId?`, `subjectProjectId?`, `metadata?`, `visibility`, `createdAt`.
+- **Relationships:** Belongs to one `Club`; can reference users/projects affected by governance actions.
+- **Important constraints/rules:**
+  - `sequence` is monotonically increasing per `clubId` for deterministic ordering.
+  - Intended for governance/structural events (ownership/roles/project-link governance), not general social content activity.

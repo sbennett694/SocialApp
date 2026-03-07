@@ -28,9 +28,10 @@ type ProfileScreenProps = {
   user: AuthUser;
   users: UserBasic[];
   focusUserId?: string;
+  onNavigateToDetail?: (target: "CLUBS" | "PROJECTS", id?: string) => void;
 };
 
-export function ProfileScreen({ user, users, focusUserId }: ProfileScreenProps) {
+export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: ProfileScreenProps) {
   const [selectedProfileUserId, setSelectedProfileUserId] = useState(user.userId);
   const [profile, setProfile] = useState<UserProfileSummary | null>(null);
   const [commonsPosts, setCommonsPosts] = useState<Post[]>([]);
@@ -42,7 +43,7 @@ export function ProfileScreen({ user, users, focusUserId }: ProfileScreenProps) 
   const [closeCircle, setCloseCircle] = useState<any[]>([]);
   const [invites, setInvites] = useState<{ incoming: any[]; outgoing: any[] }>({ incoming: [], outgoing: [] });
 
-  const [tab, setTab] = useState<ProfileTab>("COMMONS");
+  const [tab, setTab] = useState<ProfileTab | "ALL">("ALL");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -51,7 +52,7 @@ export function ProfileScreen({ user, users, focusUserId }: ProfileScreenProps) 
   useEffect(() => {
     if (focusUserId) {
       setSelectedProfileUserId(focusUserId);
-      setTab("COMMONS");
+      setTab("ALL");
     }
   }, [focusUserId]);
 
@@ -159,8 +160,32 @@ export function ProfileScreen({ user, users, focusUserId }: ProfileScreenProps) 
 
   function openUserContent(userId: string) {
     setSelectedProfileUserId(userId);
-    setTab("COMMONS");
+    setTab("ALL");
   }
+
+  const allContentItems = useMemo(
+    () => [
+      ...commonsPosts.map((post) => ({
+        id: `post-${post.postId}`,
+        section: "Commons" as const,
+        title: post.text,
+        subtitle: `@${post.userId}`
+      })),
+      ...projects.map((project) => ({
+        id: `project-${project.id}`,
+        section: "Project" as const,
+        title: project.title,
+        subtitle: project.description || "No description"
+      })),
+      ...clubs.map((club) => ({
+        id: `club-${club.id}`,
+        section: "Club" as const,
+        title: club.name,
+        subtitle: "Member club"
+      }))
+    ],
+    [commonsPosts, projects, clubs]
+  );
 
   if (loading) return <ActivityIndicator style={{ marginTop: 24 }} />;
 
@@ -182,7 +207,7 @@ export function ProfileScreen({ user, users, focusUserId }: ProfileScreenProps) 
           {message ? <Text style={styles.message}>{message}</Text> : null}
 
           <View style={styles.tabRow}>
-            {(["COMMONS", "PROJECTS", "CLUBS", "NETWORK"] as ProfileTab[]).map((tabName) => {
+            {(["ALL", "COMMONS", "PROJECTS", "CLUBS", "NETWORK"] as Array<ProfileTab | "ALL">).map((tabName) => {
               const active = tab === tabName;
               return (
                 <Pressable key={tabName} onPress={() => setTab(tabName)} style={[styles.pill, active && styles.pillActive]}>
@@ -199,16 +224,48 @@ export function ProfileScreen({ user, users, focusUserId }: ProfileScreenProps) 
             ) : null}
           </View>
 
+          {tab === "ALL" ? (
+            <>
+              {allContentItems.length === 0 ? <Text style={styles.hint}>No profile content yet.</Text> : null}
+              {allContentItems.map((item) => (
+                <Pressable
+                  key={item.id}
+                  style={styles.card}
+                  onPress={() => {
+                    if (item.section === "Project") {
+                      onNavigateToDetail?.("PROJECTS", item.id.replace("project-", ""));
+                    }
+                    if (item.section === "Club") {
+                      onNavigateToDetail?.("CLUBS", item.id.replace("club-", ""));
+                    }
+                  }}
+                >
+                  <Text style={styles.sectionBadge}>{item.section}</Text>
+                  <Text style={styles.cardTitle}>{item.title}</Text>
+                  {item.section === "Project" || item.section === "Club" ? <Text style={styles.openHint}>Tap to open {item.section.toLowerCase()}</Text> : null}
+                  <Text style={styles.hint}>{item.subtitle}</Text>
+                </Pressable>
+              ))}
+            </>
+          ) : null}
+
           {tab === "COMMONS" ? commonsPosts.map((post) => (
             <View key={post.postId} style={styles.card}><Text style={styles.cardTitle}>{post.text}</Text><Text style={styles.hint}>@{post.userId}</Text></View>
           )) : null}
 
           {tab === "PROJECTS" ? projects.map((project) => (
-            <View key={project.id} style={styles.card}><Text style={styles.cardTitle}>{project.title}</Text><Text>{project.description || "No description"}</Text></View>
+            <Pressable key={project.id} style={styles.card} onPress={() => onNavigateToDetail?.("PROJECTS", project.id)}>
+              <Text style={styles.cardTitle}>{project.title}</Text>
+              <Text style={styles.openHint}>Tap to open project</Text>
+              <Text>{project.description || "No description"}</Text>
+            </Pressable>
           )) : null}
 
           {tab === "CLUBS" ? clubs.map((club) => (
-            <View key={club.id} style={styles.card}><Text style={styles.cardTitle}>{club.name}</Text></View>
+            <Pressable key={club.id} style={styles.card} onPress={() => onNavigateToDetail?.("CLUBS", club.id)}>
+              <Text style={styles.cardTitle}>{club.name}</Text>
+              <Text style={styles.openHint}>Tap to open club</Text>
+            </Pressable>
           )) : null}
 
           {tab === "NETWORK" ? (
@@ -301,7 +358,20 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 12, fontWeight: "600", color: "#333" },
   pillTextActive: { color: "#fff" },
   card: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10, marginTop: 8 },
+  sectionBadge: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: "#c4c4c4",
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    fontSize: 11,
+    color: "#555",
+    marginBottom: 6,
+    fontWeight: "600"
+  },
   cardTitle: { fontWeight: "600", marginBottom: 4 },
+  openHint: { color: "#0b57d0", fontSize: 12, fontWeight: "600", marginBottom: 4 },
   sectionTitle: { fontSize: 16, fontWeight: "700", marginTop: 12, marginBottom: 6 },
   actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   actionButton: {

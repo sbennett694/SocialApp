@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   Club,
   ClubMember,
@@ -22,10 +22,13 @@ import {
   updateClub
 } from "../api/client";
 import { AuthUser } from "../auth/session";
+import { CategorySelectorField } from "../components/CategorySelectorField";
 
 type ClubsScreenProps = {
   user: AuthUser;
   rootResetSignal?: number;
+  focusClubId?: string;
+  onNavigateToProject?: (projectId: string) => void;
 };
 
 type ClubProjectRequest = {
@@ -33,7 +36,7 @@ type ClubProjectRequest = {
   link: ProjectClubLink;
 };
 
-export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
+export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigateToProject }: ClubsScreenProps) {
   const [clubsPageTab, setClubsPageTab] = useState<"MY_CLUBS" | "DISCOVER" | "CLUB_FEED">("MY_CLUBS");
   const [clubs, setClubs] = useState<Club[]>([]);
   const [myClubs, setMyClubs] = useState<Club[]>([]);
@@ -111,6 +114,14 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
     setClubFeedFilterClubId("");
     setClubsPageTab("MY_CLUBS");
   }, [rootResetSignal]);
+
+  useEffect(() => {
+    if (!focusClubId) return;
+    const target = [...myClubs, ...clubs, ...joinableClubs].find((club) => club.id === focusClubId);
+    if (!target) return;
+    if (viewingClub?.id === target.id) return;
+    void openClubDetail(target);
+  }, [focusClubId, myClubs, clubs, joinableClubs, viewingClub?.id]);
 
   async function handleJoinClub(clubId: string, clubName: string) {
     try {
@@ -305,6 +316,11 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
     clubFeed.length === 0 &&
     !viewingClub;
 
+  const associatedCategoryIdsForCreate = useMemo(
+    () => Array.from(new Set(myClubs.map((club) => club.categoryId).filter((value): value is string => !!value))),
+    [myClubs]
+  );
+
   if (isInitialLoad) return <ActivityIndicator style={{ marginTop: 24 }} />;
 
   const ownerMembers = clubMembers.filter((member) => member.role === "OWNER");
@@ -438,11 +454,12 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
                 <Text style={styles.sectionTitle}>Projects</Text>
                 {clubProjects.length === 0 ? <Text style={styles.hint}>No approved projects linked to this club yet.</Text> : null}
                 {clubProjects.map((item) => (
-                  <View key={`club-project-${item.id}`} style={styles.card}>
+                  <Pressable key={`club-project-${item.id}`} style={styles.card} onPress={() => onNavigateToProject?.(item.id)}>
                     <Text style={styles.clubName}>{item.title}</Text>
+                    <Text style={styles.openHint}>Tap to open project</Text>
                     <Text style={styles.hint}>{item.description || "No description"}</Text>
                     <Text style={styles.hint}>Owner: @{item.ownerId}</Text>
-                  </View>
+                  </Pressable>
                 ))}
               </>
             ) : null}
@@ -455,6 +472,9 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
                   ? clubProjectRequests.map((request) => (
                       <View key={`club-request-${request.project.id}`} style={styles.card}>
                         <Text style={styles.clubName}>{request.project.title}</Text>
+                        <Pressable onPress={() => onNavigateToProject?.(request.project.id)}>
+                          <Text style={styles.openHint}>Open project</Text>
+                        </Pressable>
                         <Text style={styles.hint}>Owner: @{request.project.ownerId}</Text>
                         {request.project.description ? <Text style={styles.hint}>{request.project.description}</Text> : null}
                         <Text style={styles.hint}>Requested: {new Date(request.link.createdAt).toLocaleString()}</Text>
@@ -522,19 +542,25 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
           renderItem={({ item }) => {
             const isOwnerClub = item.ownerId === user.userId;
             return (
-              <View style={styles.card}>
-                <Text style={styles.clubName}>{item.name}</Text>
-                <Text style={styles.hint}>{item.description || "No description yet"}</Text>
-                <View style={styles.rowWrap}>
-                  <Pressable onPress={() => openClubDetail(item)} style={styles.pill}>
-                    <Text style={styles.pillText}>View Club</Text>
-                  </Pressable>
-                  {isOwnerClub ? (
+              <View style={[styles.card, styles.interactiveCard]}>
+                <Pressable
+                  onPress={() => openClubDetail(item)}
+                  style={({ pressed }) => [styles.cardOpenArea, pressed && styles.interactiveCardPressed]}
+                >
+                  <View style={styles.cardTitleRow}>
+                    <Text style={styles.clubName}>{item.name}</Text>
+                    <Text style={styles.openHint}>Open ›</Text>
+                  </View>
+                  <Text style={styles.hint}>{item.description || "No description yet"}</Text>
+                  <Text style={styles.tapHint}>Tap card to open club</Text>
+                </Pressable>
+                {isOwnerClub ? (
+                  <View style={styles.rowWrap}>
                     <Pressable onPress={() => openEditModal(item)} style={styles.pill}>
                       <Text style={styles.pillText}>Modify Info</Text>
                     </Pressable>
-                  ) : null}
-                </View>
+                  </View>
+                ) : null}
               </View>
             );
           }}
@@ -718,36 +744,40 @@ export function ClubsScreen({ user, rootResetSignal = 0 }: ClubsScreenProps) {
 
       <Modal visible={createModalOpen} transparent animationType="fade" onRequestClose={() => setCreateModalOpen(false)}>
         <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCreateModalOpen(false)} />
           <View style={styles.modalCard}>
             <Text style={styles.sectionTitle}>Create a Club</Text>
-            <TextInput value={newClubTitle} onChangeText={setNewClubTitle} placeholder="Club title" style={styles.input} />
-            <TextInput
-              value={newClubDescription}
-              onChangeText={setNewClubDescription}
-              placeholder="Description (optional)"
-              style={styles.input}
-            />
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
+              <TextInput value={newClubTitle} onChangeText={setNewClubTitle} placeholder="Club title" style={styles.input} />
+              <TextInput
+                value={newClubDescription}
+                onChangeText={setNewClubDescription}
+                placeholder="Description (optional)"
+                style={styles.input}
+              />
 
-            <Text style={styles.filterLabel}>Category</Text>
-            <View style={styles.rowWrap}>
-              {categories.map((item) => {
-                const active = selectedCategoryId === item.id;
-                return (
-                  <Pressable key={`create-${item.id}`} onPress={() => setSelectedCategoryId(item.id)} style={[styles.pill, active && styles.pillActive]}>
-                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{item.name}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+              <CategorySelectorField
+                label="Category"
+                categories={categories}
+                selectedCategoryId={selectedCategoryId}
+                associatedCategoryIds={associatedCategoryIdsForCreate}
+                onSelectCategory={setSelectedCategoryId}
+              />
 
-            <View style={styles.rowWrap}>
-              <Pressable onPress={() => setNewClubIsPublic(true)} style={[styles.pill, newClubIsPublic && styles.pillActive]}>
-                <Text style={[styles.pillText, newClubIsPublic && styles.pillTextActive]}>Public</Text>
-              </Pressable>
-              <Pressable onPress={() => setNewClubIsPublic(false)} style={[styles.pill, !newClubIsPublic && styles.pillActive]}>
-                <Text style={[styles.pillText, !newClubIsPublic && styles.pillTextActive]}>Private</Text>
-              </Pressable>
-            </View>
+              <View style={styles.rowWrap}>
+                <Pressable onPress={() => setNewClubIsPublic(true)} style={[styles.pill, newClubIsPublic && styles.pillActive]}>
+                  <Text style={[styles.pillText, newClubIsPublic && styles.pillTextActive]}>Public</Text>
+                </Pressable>
+                <Pressable onPress={() => setNewClubIsPublic(false)} style={[styles.pill, !newClubIsPublic && styles.pillActive]}>
+                  <Text style={[styles.pillText, !newClubIsPublic && styles.pillTextActive]}>Private</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
 
             <View style={styles.rowWrap}>
               <Pressable onPress={handleCreateClub} style={styles.buttonInline}>
@@ -835,7 +865,33 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 8
   },
+  interactiveCard: {
+    padding: 0,
+    borderColor: "#bbb"
+  },
+  cardOpenArea: {
+    padding: 10,
+    borderRadius: 10
+  },
+  interactiveCardPressed: {
+    backgroundColor: "#f3f6ff"
+  },
+  cardTitleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
   clubName: { fontWeight: "600", marginBottom: 6 },
+  openHint: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0b57d0"
+  },
+  tapHint: {
+    fontSize: 12,
+    color: "#0b57d0",
+    marginTop: 2
+  },
   button: {
     marginTop: 6,
     borderWidth: 1,
@@ -863,6 +919,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     maxHeight: "85%"
+  },
+  modalScroll: {
+    maxHeight: 420
+  },
+  modalScrollContent: {
+    paddingBottom: 4
   },
   categoryModalCard: {
     maxHeight: "80%"

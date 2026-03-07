@@ -1,0 +1,12 @@
+{
+  "name": "socialapp-dev-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:launch": "scripts\\dev-launch.cmd",
+    "dev:relaunch": "scripts\\dev-relaunch.cmd",
+    "dev:reset-data": "npm --prefix backend run dev:reset",
+    "dev:seed-data": "npm --prefix backend run dev:seed",
+    "dev:reseed-data": "npm --prefix backend run dev:reseed"
+  }
+}

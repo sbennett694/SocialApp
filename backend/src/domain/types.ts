@@ -63,6 +63,7 @@ export type Club = {
   id: string;
   categoryId: string;
   name: string;
+  founderId: string;
   ownerId: string;
   isPublic: boolean;
   createdAt: string;

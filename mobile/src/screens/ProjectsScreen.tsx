@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   Club,
   createProject,
@@ -24,11 +24,17 @@ import {
   updateProjectMilestoneTask
 } from "../api/client";
 import { AuthUser } from "../auth/session";
+import { CategorySelectorField } from "../components/CategorySelectorField";
 
-type ProjectsScreenProps = { user: AuthUser };
 type MilestoneVisualState = "COMPLETED" | "IN_PROGRESS" | "FUTURE";
 
-export function ProjectsScreen({ user }: ProjectsScreenProps) {
+type ProjectsScreenProps = {
+  user: AuthUser;
+  focusProjectId?: string;
+  onNavigateToClub?: (clubId: string) => void;
+};
+
+export function ProjectsScreen({ user, focusProjectId, onNavigateToClub }: ProjectsScreenProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [allClubs, setAllClubs] = useState<Club[]>([]);
@@ -40,7 +46,6 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
   const [createAs, setCreateAs] = useState<"USER" | "CLUB">("USER");
   const [selectedClubId, setSelectedClubId] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
-  const [categoryNameInput, setCategoryNameInput] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
@@ -73,7 +78,6 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
       setMyClubs(clubs.filter((club) => club.ownerId === user.userId));
       if (!selectedCategoryId && categoryData.categories.length > 0) {
         setSelectedCategoryId(categoryData.categories[0].id);
-        setCategoryNameInput(categoryData.categories[0].name);
       }
       if (!selectedClubId && clubs.length > 0) {
         setSelectedClubId(clubs[0].id);
@@ -88,6 +92,14 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
   useEffect(() => {
     loadData();
   }, [user.userId]);
+
+  useEffect(() => {
+    if (!focusProjectId || projects.length === 0) return;
+    const target = projects.find((project) => project.id === focusProjectId);
+    if (!target) return;
+    if (selectedProject?.id === target.id) return;
+    void openProject(target);
+  }, [focusProjectId, projects, selectedProject?.id]);
 
   async function refreshProjectDetails(project: Project) {
     setProjectDetailLoading(true);
@@ -200,6 +212,11 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
   );
 
   const activeMilestone = firstOpenMilestoneIndex >= 0 ? orderedMilestones[firstOpenMilestoneIndex] : null;
+
+  const associatedCategoryIdsForCreate = useMemo(
+    () => Array.from(new Set([...projects.map((project) => project.categoryId), ...myClubs.map((club) => club.categoryId)])),
+    [projects, myClubs]
+  );
 
   function getMilestoneVisualState(milestone: ProjectMilestone, index: number): MilestoneVisualState {
     if (milestone.status === "DONE") return "COMPLETED";
@@ -394,7 +411,13 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
             <Text style={styles.activeMilestoneTitle}>Clubs</Text>
             {approvedLinks.length === 0 ? <Text style={styles.hint}>Not attached to any clubs yet.</Text> : null}
             {approvedLinks.map((link) => (
-              <Text key={`approved-${link.clubId}`} style={styles.hint}>• {link.club?.name ?? link.clubId} (approved)</Text>
+              <Pressable
+                key={`approved-${link.clubId}`}
+                onPress={() => onNavigateToClub?.(link.clubId)}
+                style={styles.inlineLinkRow}
+              >
+                <Text style={styles.inlineLinkText}>• {link.club?.name ?? link.clubId} (approved) • Open</Text>
+              </Pressable>
             ))}
 
             <Pressable onPress={() => handleOpenRequestClubModal(linkableClubs)} style={styles.buttonInline}>
@@ -405,7 +428,12 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
             {pendingLinks.length > 0 ? <Text style={styles.label}>Pending Requests</Text> : null}
             {pendingLinks.map((link) => (
               <View key={`pending-${link.clubId}`} style={styles.pendingCard}>
-                <Text style={styles.hint}>• {link.club?.name ?? link.clubId} (pending)</Text>
+                <Pressable
+                  onPress={() => onNavigateToClub?.(link.clubId)}
+                  style={styles.inlineLinkRow}
+                >
+                  <Text style={styles.inlineLinkText}>• {link.club?.name ?? link.clubId} (pending) • Open</Text>
+                </Pressable>
                 {link.canApprove ? (
                   <View style={styles.rowWrap}>
                     <Pressable onPress={() => handleReviewProjectClubLink(link.clubId, "APPROVED")} style={styles.buttonInline}>
@@ -557,39 +585,40 @@ export function ProjectsScreen({ user }: ProjectsScreenProps) {
 
       <Modal visible={createModalOpen} transparent animationType="fade" onRequestClose={() => setCreateModalOpen(false)}>
         <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCreateModalOpen(false)} />
           <View style={styles.modalCard}>
             <Text style={styles.sectionTitle}>Create Project</Text>
-            <View style={styles.rowWrap}>
-              <Pressable onPress={() => setCreateAs("USER")} style={[styles.pill, createAs === "USER" && styles.pillActive]}><Text style={[styles.pillText, createAs === "USER" && styles.pillTextActive]}>As Me</Text></Pressable>
-              <Pressable onPress={() => setCreateAs("CLUB")} style={[styles.pill, createAs === "CLUB" && styles.pillActive]}><Text style={[styles.pillText, createAs === "CLUB" && styles.pillTextActive]}>As Club</Text></Pressable>
-            </View>
-            {createAs === "CLUB" ? (
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
               <View style={styles.rowWrap}>
-                {myClubs.map((club) => (
-                  <Pressable key={club.id} onPress={() => setSelectedClubId(club.id)} style={[styles.pill, selectedClubId === club.id && styles.pillActive]}>
-                    <Text style={[styles.pillText, selectedClubId === club.id && styles.pillTextActive]}>{club.name}</Text>
-                  </Pressable>
-                ))}
+                <Pressable onPress={() => setCreateAs("USER")} style={[styles.pill, createAs === "USER" && styles.pillActive]}><Text style={[styles.pillText, createAs === "USER" && styles.pillTextActive]}>As Me</Text></Pressable>
+                <Pressable onPress={() => setCreateAs("CLUB")} style={[styles.pill, createAs === "CLUB" && styles.pillActive]}><Text style={[styles.pillText, createAs === "CLUB" && styles.pillTextActive]}>As Club</Text></Pressable>
               </View>
-            ) : null}
-            <Text style={styles.label}>Club Category</Text>
-            <TextInput value={categoryNameInput} onChangeText={setCategoryNameInput} placeholder="Club category" style={styles.input} />
-            <View style={styles.rowWrap}>
-              {categories.slice(0, 24).map((category) => (
-                <Pressable
-                  key={category.id}
-                  onPress={() => {
-                    setSelectedCategoryId(category.id);
-                    setCategoryNameInput(category.name);
-                  }}
-                  style={[styles.pill, selectedCategoryId === category.id && styles.pillActive]}
-                >
-                  <Text style={[styles.pillText, selectedCategoryId === category.id && styles.pillTextActive]}>{category.name}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <TextInput value={title} onChangeText={setTitle} placeholder="Project title" style={styles.input} />
-            <TextInput value={description} onChangeText={setDescription} placeholder="Project description" style={styles.input} />
+              {createAs === "CLUB" ? (
+                <View style={styles.rowWrap}>
+                  {myClubs.map((club) => (
+                    <Pressable key={club.id} onPress={() => setSelectedClubId(club.id)} style={[styles.pill, selectedClubId === club.id && styles.pillActive]}>
+                      <Text style={[styles.pillText, selectedClubId === club.id && styles.pillTextActive]}>{club.name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+
+              <CategorySelectorField
+                label="Project Category"
+                categories={categories}
+                selectedCategoryId={selectedCategoryId}
+                associatedCategoryIds={associatedCategoryIdsForCreate}
+                onSelectCategory={setSelectedCategoryId}
+              />
+
+              <TextInput value={title} onChangeText={setTitle} placeholder="Project title" style={styles.input} />
+              <TextInput value={description} onChangeText={setDescription} placeholder="Project description" style={styles.input} />
+            </ScrollView>
             <View style={styles.rowWrap}>
               <Pressable onPress={handleCreateProject} style={styles.buttonInline}><Text style={styles.buttonText}>Create</Text></Pressable>
               <Pressable onPress={() => setCreateModalOpen(false)} style={styles.buttonInline}><Text style={styles.buttonText}>Cancel</Text></Pressable>
@@ -621,6 +650,8 @@ const styles = StyleSheet.create({
   card: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10, marginBottom: 8 },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 },
   modalCard: { backgroundColor: "#fff", borderRadius: 12, padding: 14, maxHeight: "85%" },
+  modalScroll: { maxHeight: 440 },
+  modalScrollContent: { paddingBottom: 4 },
   milestoneDone: { borderColor: "#1b8f3c", backgroundColor: "#f0fff4" },
   milestoneActive: { borderColor: "#0b57d0", backgroundColor: "#f3f8ff" },
   milestoneFuture: { borderColor: "#b0b0b0", backgroundColor: "#f7f7f7" },
@@ -638,5 +669,7 @@ const styles = StyleSheet.create({
   taskText: { fontSize: 16, color: "#222", flexShrink: 1 },
   modalList: { maxHeight: 280, marginBottom: 8 },
   modalListItem: { borderWidth: 1, borderColor: "#e1e1e1", borderRadius: 10, padding: 10, marginBottom: 8 },
-  modalListItemTitle: { fontWeight: "600", marginBottom: 4 }
+  modalListItemTitle: { fontWeight: "600", marginBottom: 4 },
+  inlineLinkRow: { paddingVertical: 3 },
+  inlineLinkText: { color: "#0b57d0", fontWeight: "600" }
 });

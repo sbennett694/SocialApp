@@ -23,7 +23,7 @@ type HomeScreenProps = {
   notificationsLoading: boolean;
   onRefreshNotifications: () => Promise<void> | void;
   onMarkNotificationRead: (notificationId: string) => void;
-  onNavigate: (target: HomeNavigationTarget) => void;
+  onNavigate: (target: HomeNavigationTarget, options?: { projectId?: string; clubId?: string }) => void;
 };
 
 type ProjectSummary = {
@@ -204,8 +204,9 @@ export function HomeScreen({
             </View>
             {activeProjects.length === 0 ? <Text style={styles.hint}>No active projects yet.</Text> : null}
             {activeProjects.map((item) => (
-              <Pressable key={item.project.id} onPress={() => onNavigate("PROJECTS")} style={styles.itemCard}>
+              <Pressable key={item.project.id} onPress={() => onNavigate("PROJECTS", { projectId: item.project.id })} style={styles.itemCard}>
                 <Text style={styles.itemTitle}>{item.project.title}</Text>
+                <Text style={styles.openHint}>Tap to open project</Text>
                 {item.activeMilestoneTitle ? <Text style={styles.itemMeta}>Active milestone: {item.activeMilestoneTitle}</Text> : null}
                 {item.taskProgressHint ? <Text style={styles.itemMeta}>Tasks: {item.taskProgressHint}</Text> : null}
                 {item.recentUpdateAt ? (
@@ -242,10 +243,15 @@ export function HomeScreen({
             </View>
             {progressSignals.length === 0 ? <Text style={styles.hint}>No recent project progress.</Text> : null}
             {progressSignals.map((event) => (
-              <Pressable key={event.id} onPress={() => onNavigate("PROJECTS")} style={styles.itemCard}>
+              <Pressable
+                key={event.id}
+                onPress={() => onNavigate("PROJECTS", event.projectId ? { projectId: event.projectId } : undefined)}
+                style={styles.itemCard}
+              >
                 <Text style={styles.itemTitle}>
                   {event.eventType === "MILESTONE_COMPLETED" ? "Milestone completed" : "Task completed"}
                 </Text>
+                <Text style={styles.openHint}>Tap to open project</Text>
                 <Text style={styles.itemMeta}>By @{event.actorId}</Text>
                 <Text style={styles.itemMeta}>{new Date(event.sortTimestamp).toLocaleString()}</Text>
               </Pressable>
@@ -261,8 +267,13 @@ export function HomeScreen({
             </View>
             {clubUpdates.length === 0 ? <Text style={styles.hint}>No recent updates from your clubs.</Text> : null}
             {clubUpdates.map((post) => (
-              <Pressable key={post.postId} onPress={() => onNavigate("CLUBS")} style={styles.itemCard}>
+              <Pressable
+                key={post.postId}
+                onPress={() => onNavigate("CLUBS", post.clubId ? { clubId: post.clubId } : undefined)}
+                style={styles.itemCard}
+              >
                 <Text style={styles.itemTitle}>@{post.userId}</Text>
+                <Text style={styles.openHint}>Tap to open club</Text>
                 <Text style={styles.itemBody} numberOfLines={2}>{post.text}</Text>
                 <Text style={styles.itemMeta}>{new Date(post.createdAt).toLocaleString()}</Text>
               </Pressable>
@@ -278,7 +289,21 @@ export function HomeScreen({
             </View>
             {recentActivity.length === 0 ? <Text style={styles.hint}>No recent activity.</Text> : null}
             {recentActivity.map((event) => (
-              <Pressable key={event.id} onPress={() => onNavigate("COMMONS")} style={styles.itemCard}>
+              <Pressable
+                key={event.id}
+                onPress={() => {
+                  if (event.projectId) {
+                    onNavigate("PROJECTS", { projectId: event.projectId });
+                    return;
+                  }
+                  if (event.clubId) {
+                    onNavigate("CLUBS", { clubId: event.clubId });
+                    return;
+                  }
+                  onNavigate("COMMONS");
+                }}
+                style={styles.itemCard}
+              >
                 <Text style={styles.itemTitle}>{event.eventType.replaceAll("_", " ")}</Text>
                 <Text style={styles.itemMeta}>@{event.actorId}</Text>
                 <Text style={styles.itemMeta}>{new Date(event.sortTimestamp).toLocaleString()}</Text>
@@ -395,6 +420,12 @@ const styles = StyleSheet.create({
   },
   itemTitle: {
     fontWeight: "700",
+    marginBottom: 2
+  },
+  openHint: {
+    color: "#0b57d0",
+    fontSize: 12,
+    fontWeight: "600",
     marginBottom: 2
   },
   itemBody: {
