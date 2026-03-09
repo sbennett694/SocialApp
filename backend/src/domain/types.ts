@@ -29,6 +29,12 @@ export type CloseCircleInviteStatus = "PENDING" | "ACCEPTED" | "DECLINED" | "BLO
 
 export type ClubMemberRole = "MEMBER" | "MODERATOR" | "OWNER";
 
+export type ClubEventVisibility = "CLUB_MEMBERS" | "PUBLIC_CLUB";
+
+export type ClubEventStatus = "SCHEDULED" | "CANCELLED";
+
+export type TaskTimeEntryType = "MANUAL";
+
 export type PostTag = "WIN" | "PROGRESS" | "TIP" | "QUESTION" | "SHOWCASE";
 
 export type User = {
@@ -76,6 +82,22 @@ export type ClubMember = {
   userId: string;
   role: ClubMemberRole;
   createdAt: string;
+};
+
+export type ClubEvent = {
+  id: string;
+  clubId: string;
+  title: string;
+  description?: string;
+  isAllDay?: boolean;
+  startAt: string;
+  endAt?: string;
+  locationText?: string;
+  visibility: ClubEventVisibility;
+  status: ClubEventStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type Project = {
@@ -140,4 +162,16 @@ export type ModerationAction = {
   actorId: string;
   reason: string;
   createdAt: string;
+};
+
+export type TaskTimeEntry = {
+  id: string;
+  taskId: string;
+  userId: string;
+  entryType: TaskTimeEntryType;
+  durationMinutes: number;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
 };

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   Pressable,
   StyleSheet,
@@ -29,6 +30,7 @@ import {
 } from "../api/client";
 import { config } from "../config";
 import { AuthUser } from "../auth/session";
+import { useTemporaryHighlight } from "../lib/useTemporaryHighlight";
 
 const threadLabels: Record<ThreadType, string> = {
   COMMENTS: "Comments",
@@ -37,9 +39,39 @@ const threadLabels: Record<ThreadType, string> = {
   SUGGESTIONS: "Suggestions"
 };
 
+const interactionThreadTypes: ThreadType[] = ["COMMENTS", "THANK_YOU", "SUGGESTIONS", "QUESTIONS"];
+const COMMENT_PREVIEW_MAX_LENGTH = 80;
+
+function truncateCommentPreview(text: string, maxLength = COMMENT_PREVIEW_MAX_LENGTH): string {
+  const normalized = text.trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(maxLength - 1, 0)).trimEnd()}…`;
+}
+
+function buildGratitudeSummary(gratitudeResponses: Comment[]): string | undefined {
+  if (gratitudeResponses.length === 0) return undefined;
+  const firstAuthor = gratitudeResponses[0]?.authorId;
+  if (!firstAuthor) return undefined;
+  if (gratitudeResponses.length === 1) {
+    return `Gratitude from ${firstAuthor}`;
+  }
+  return `Gratitude from ${firstAuthor} and ${gratitudeResponses.length - 1} others`;
+}
+
 type CommonsScreenProps = {
   user: AuthUser;
-  onNavigate?: (target: "CLUBS" | "PROJECTS", id?: string) => void;
+  focusPostId?: string;
+  onFocusPostConsumed?: (postId: string) => void;
+  onNavigate?: (
+    target: "CLUBS" | "PROJECTS",
+    options?: {
+      clubId?: string;
+      postId?: string;
+      projectId?: string;
+      focusItemId?: string;
+      focusItemType?: "MILESTONE" | "TASK";
+    }
+  ) => void;
 };
 
 type CommonsFeedFilter = "ALL" | "POSTS" | "PROJECTS" | "PROGRESS";
@@ -85,7 +117,8 @@ function ActivityCard({
   );
 }
 
-export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
+export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate }: CommonsScreenProps) {
+  const feedListRef = useRef<FlatList<FeedDisplayItem> | null>(null);
   const [events, setEvents] = useState<FeedEvent[]>([]);
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<CommonsFeedFilter>("ALL");
   const [loading, setLoading] = useState(true);
@@ -99,9 +132,14 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
   const [activeReplyParentId, setActiveReplyParentId] = useState<string | undefined>(undefined);
   const [comments, setComments] = useState<Comment[]>([]);
   const [threadCountsByPostId, setThreadCountsByPostId] = useState<Record<string, Partial<Record<ThreadType, number>>>>({});
+  const [interactionPreviewByPostId, setInteractionPreviewByPostId] = useState<
+    Record<string, { firstCommentText?: string; gratitudeSummary?: string }>
+  >({});
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [commentMessage, setCommentMessage] = useState<string | null>(null);
+  const [pendingFocusPostId, setPendingFocusPostId] = useState<string | null>(null);
+  const { highlightedId: highlightedPostId, triggerHighlight, emphasisAnimatedStyle } = useTemporaryHighlight(1800);
 
   const [postById, setPostById] = useState<Record<string, Post>>({});
   const [clubById, setClubById] = useState<Record<string, Club>>({});
@@ -207,22 +245,40 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
   }
 
   async function loadThreadCounts(postId: string) {
-    if (threadCountsByPostId[postId]?.COMMENTS !== undefined && threadCountsByPostId[postId]?.THANK_YOU !== undefined) {
+    const hasAllCounts = interactionThreadTypes.every((threadType) => threadCountsByPostId[postId]?.[threadType] !== undefined);
+    if (hasAllCounts) {
       return;
     }
 
     try {
-      const [commentsList, gratitudeList] = await Promise.all([
-        getComments(postId, "COMMENTS"),
-        getComments(postId, "THANK_YOU")
-      ]);
+      const threadLists = await Promise.all(
+        interactionThreadTypes.map(async (threadType) => {
+          const list = await getComments(postId, threadType);
+          return [threadType, list] as const;
+        })
+      );
+
+      const nextCounts: Partial<Record<ThreadType, number>> = {};
+      threadLists.forEach(([threadType, list]) => {
+        nextCounts[threadType] = list.length;
+      });
+
+      const firstComment = threadLists.find(([threadType]) => threadType === "COMMENTS")?.[1]?.[0];
+      const gratitudeResponses = threadLists.find(([threadType]) => threadType === "THANK_YOU")?.[1] ?? [];
 
       setThreadCountsByPostId((prev) => ({
         ...prev,
         [postId]: {
           ...prev[postId],
-          COMMENTS: commentsList.length,
-          THANK_YOU: gratitudeList.length
+          ...nextCounts
+        }
+      }));
+
+      setInteractionPreviewByPostId((prev) => ({
+        ...prev,
+        [postId]: {
+          firstCommentText: firstComment?.textContent ? truncateCommentPreview(firstComment.textContent) : undefined,
+          gratitudeSummary: buildGratitudeSummary(gratitudeResponses)
         }
       }));
     } catch {
@@ -318,6 +374,32 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
   }, [activePostId, activeThreadType]);
 
   useEffect(() => {
+    if (!focusPostId) return;
+    setSelectedFeedFilter("ALL");
+    setPendingFocusPostId(focusPostId);
+    setActivePostId(focusPostId);
+    setActiveThreadType("COMMENTS");
+    setActiveReplyParentId(undefined);
+    setCommentText("");
+    void loadComments(focusPostId, "COMMENTS");
+    onFocusPostConsumed?.(focusPostId);
+  }, [focusPostId]);
+
+  useEffect(() => {
+    if (!pendingFocusPostId) return;
+
+    const focusedIndex = displayItems.findIndex(
+      (item) => item.kind === "EVENT" && item.event.entityType === "POST" && item.event.entityId === pendingFocusPostId
+    );
+
+    if (focusedIndex < 0) return;
+
+    feedListRef.current?.scrollToIndex({ index: focusedIndex, animated: true, viewPosition: 0.2 });
+    triggerHighlight(pendingFocusPostId);
+    setPendingFocusPostId(null);
+  }, [displayItems, pendingFocusPostId]);
+
+  useEffect(() => {
     if (!activePostId) return;
     const stillVisible = filteredEvents.some((event) => event.entityType === "POST" && event.entityId === activePostId);
     if (!stillVisible) {
@@ -410,7 +492,7 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
       });
       setCommentText("");
       setActiveReplyParentId(undefined);
-      setCommentMessage("Comment posted.");
+      setCommentMessage(`${threadLabels[threadType]} posted.`);
       loadComments(postId, threadType);
     } catch (err) {
       setCommentMessage((err as Error).message);
@@ -514,19 +596,38 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
 
   async function handlePressFeedTile(item: FeedDisplayItem) {
     if (item.kind === "GROUPED_TASK_COMPLETION") {
-      onNavigate?.("PROJECTS", item.projectId);
+      onNavigate?.("PROJECTS", {
+        projectId: item.projectId,
+        focusItemId: undefined,
+        focusItemType: undefined
+      });
       return;
     }
 
     const event = item.event;
 
-    if (event.projectId || event.source === "PROJECTS") {
-      onNavigate?.("PROJECTS", event.projectId);
+    if (event.eventType === "CLUB_POST_CREATED" || event.source === "CLUBS") {
+      onNavigate?.("CLUBS", {
+        clubId: event.clubId,
+        postId: event.entityType === "POST" ? event.entityId : undefined
+      });
       return;
     }
 
-    if (event.clubId || event.source === "CLUBS") {
-      onNavigate?.("CLUBS", event.clubId);
+    if (event.projectId || event.source === "PROJECTS") {
+      onNavigate?.("PROJECTS", {
+        projectId: event.projectId,
+        focusItemId:
+          event.eventType === "MILESTONE_COMPLETED" || event.eventType === "TASK_COMPLETED"
+            ? event.entityId
+            : undefined,
+        focusItemType:
+          event.eventType === "MILESTONE_COMPLETED"
+            ? "MILESTONE"
+            : event.eventType === "TASK_COMPLETED"
+              ? "TASK"
+              : undefined
+      });
       return;
     }
 
@@ -541,8 +642,12 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
 
   return (
     <FlatList
+      ref={feedListRef}
       data={displayItems}
       keyExtractor={(item) => item.id}
+      onScrollToIndexFailed={() => {
+        feedListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }}
       contentContainerStyle={styles.list}
       renderItem={({ item }) => {
         if (item.kind === "GROUPED_TASK_COMPLETION") {
@@ -577,21 +682,31 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
 
         const event = item.event;
         const postId = event.entityType === "POST" ? event.entityId : null;
+        const isThreadExpanded = !!postId && activePostId === postId;
+        const isFocused = !!postId && highlightedPostId === postId;
+        const interactionPreview = postId ? interactionPreviewByPostId[postId] : undefined;
         return (
-          <View>
+          <Animated.View style={[isFocused ? styles.focusedFeedItem : undefined, isFocused ? emphasisAnimatedStyle : undefined]}>
             <Pressable onPress={() => void handlePressFeedTile(item)}>{getEventCard(event)}</Pressable>
 
             {postId ? (
               <View style={styles.threadCard}>
+                {!isThreadExpanded && interactionPreview?.firstCommentText ? (
+                  <Text style={styles.interactionPreviewText} numberOfLines={1}>
+                    💬 First comment: "{interactionPreview.firstCommentText}"
+                  </Text>
+                ) : null}
+                {!isThreadExpanded && interactionPreview?.gratitudeSummary ? (
+                  <Text style={styles.interactionPreviewText} numberOfLines={1}>
+                    🙏 {interactionPreview.gratitudeSummary}
+                  </Text>
+                ) : null}
                 <Text style={styles.switcherLabel}>Respond to this post:</Text>
                 <View style={styles.mockUserButtons}>
                   {(["COMMENTS", "QUESTIONS", "THANK_YOU", "SUGGESTIONS"] as ThreadType[]).map((threadType) => {
                     const active = activePostId === postId && activeThreadType === threadType;
                     const count = threadCountsByPostId[postId]?.[threadType];
-                    const shouldShowCount = threadType === "COMMENTS" || threadType === "THANK_YOU";
-                    const label = shouldShowCount
-                      ? `${threadLabels[threadType]} (${count ?? 0})`
-                      : threadLabels[threadType];
+                    const label = `${threadLabels[threadType]} (${count ?? 0})`;
                     return (
                       <Pressable
                         key={`${item.id}-${threadType}`}
@@ -606,12 +721,12 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
                   })}
                 </View>
 
-                {activePostId === postId ? (
+                {isThreadExpanded ? (
                   <>
                     <TextInput
                       value={commentText}
                       onChangeText={setCommentText}
-                      placeholder={`Add ${activeThreadType.toLowerCase()} response...`}
+                      placeholder={`Add ${threadLabels[activeThreadType].toLowerCase()} response...`}
                       style={styles.commentInput}
                     />
                     {activeReplyParentId ? (
@@ -648,7 +763,7 @@ export function FeedScreen({ user, onNavigate }: CommonsScreenProps) {
                 ) : null}
               </View>
             ) : null}
-          </View>
+          </Animated.View>
         );
       }}
       ListEmptyComponent={<Text style={styles.message}>No activity for this filter yet.</Text>}
@@ -811,6 +926,11 @@ const styles = StyleSheet.create({
     borderTopColor: "#e4e4e4",
     paddingTop: 10
   },
+  interactionPreviewText: {
+    color: "#555",
+    fontSize: 12,
+    marginBottom: 4
+  },
   commentInput: {
     borderWidth: 1,
     borderColor: "#ccc",
@@ -906,5 +1026,13 @@ const styles = StyleSheet.create({
   },
   filterChipTextActive: {
     color: "#fff"
+  },
+  focusedFeedItem: {
+    borderWidth: 1,
+    borderColor: "#9bb8f5",
+    borderRadius: 12,
+    backgroundColor: "#f6f9ff",
+    padding: 4,
+    marginBottom: 4
   }
 });

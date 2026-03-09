@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import {
   Club,
+  ClubEvent,
   CloseCircleInvite,
   ClubMember,
   Comment,
@@ -10,6 +11,7 @@ import {
   Project,
   Reaction,
   Report,
+  TaskTimeEntry,
   User,
   Visibility
 } from "../domain/types";
@@ -41,6 +43,8 @@ export type ProjectMilestone = {
   projectId: string;
   title: string;
   status: "OPEN" | "DONE";
+  startAt?: string;
+  dueAt?: string;
   order: number;
   tasks: ProjectMilestoneTask[];
   createdBy: string;
@@ -51,6 +55,8 @@ export type ProjectMilestoneTask = {
   id: string;
   text: string;
   isDone: boolean;
+  startAt?: string;
+  dueAt?: string;
   createdBy: string;
   createdAt: string;
 };
@@ -85,10 +91,12 @@ export const store = {
   closeCircleInvites: [] as CloseCircleInvite[],
   clubMembers: [] as ClubMember[],
   clubs: [] as Club[],
+  clubEvents: [] as ClubEvent[],
   projects: [] as Project[],
   projectClubLinks: [] as ProjectClubLink[],
   projectMilestones: [] as ProjectMilestone[],
   projectHighlights: [] as ProjectHighlight[],
+  taskTimeEntries: [] as TaskTimeEntry[],
   reactions: [] as Reaction[],
   comments: [] as Comment[],
   reports: [] as Report[],
@@ -106,10 +114,12 @@ export function resetStoreToDefault() {
   clearArray(store.closeCircleInvites);
   clearArray(store.clubMembers);
   clearArray(store.clubs);
+  clearArray(store.clubEvents);
   clearArray(store.projects);
   clearArray(store.projectClubLinks);
   clearArray(store.projectMilestones);
   clearArray(store.projectHighlights);
+  clearArray(store.taskTimeEntries);
   clearArray(store.reactions);
   clearArray(store.comments);
   clearArray(store.reports);

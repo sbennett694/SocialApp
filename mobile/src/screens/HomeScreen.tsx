@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import {
+  ClubEvent,
   FeedEvent,
+  getClubEvents,
   getClubsFeed,
   getCommonsFeedEvents,
   getProjectMilestones,
@@ -23,7 +25,16 @@ type HomeScreenProps = {
   notificationsLoading: boolean;
   onRefreshNotifications: () => Promise<void> | void;
   onMarkNotificationRead: (notificationId: string) => void;
-  onNavigate: (target: HomeNavigationTarget, options?: { projectId?: string; clubId?: string }) => void;
+  onNavigate: (
+    target: HomeNavigationTarget,
+    options?: {
+      projectId?: string;
+      clubId?: string;
+      postId?: string;
+      focusItemId?: string;
+      focusItemType?: "POST" | "MILESTONE" | "TASK";
+    }
+  ) => void;
 };
 
 type ProjectSummary = {
@@ -33,11 +44,17 @@ type ProjectSummary = {
   recentUpdateAt?: string;
 };
 
+type UpcomingClubEventSummary = {
+  event: ClubEvent;
+  clubName?: string;
+};
+
 const ACTIVE_PROJECT_LIMIT = 5;
 const PROGRESS_SIGNAL_LIMIT = 5;
 const CLUB_UPDATES_LIMIT = 6;
 const RECENT_ACTIVITY_LIMIT = 5;
 const NOTIFICATIONS_PREVIEW_LIMIT = 3;
+const UPCOMING_CLUB_EVENTS_LIMIT = 5;
 
 const NEW_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -66,6 +83,7 @@ export function HomeScreen({
   const [activeProjects, setActiveProjects] = useState<ProjectSummary[]>([]);
   const [progressSignals, setProgressSignals] = useState<FeedEvent[]>([]);
   const [clubUpdates, setClubUpdates] = useState<Post[]>([]);
+  const [upcomingClubEvents, setUpcomingClubEvents] = useState<UpcomingClubEventSummary[]>([]);
   const [recentActivity, setRecentActivity] = useState<FeedEvent[]>([]);
 
   const unreadNotificationsCount = notifications.filter((item) => !notificationReadIds[item.id]).length;
@@ -149,25 +167,47 @@ export function HomeScreen({
         .slice(0, PROGRESS_SIGNAL_LIMIT);
 
       const myClubIdSet = new Set(myClubs.map((club) => club.id));
+      const clubNameById = new Map(myClubs.map((club) => [club.id, club.name]));
       const clubsFeed = await getClubsFeed(user.userId);
       const clubFeedSubset = clubsFeed
         .filter((post) => !!post.clubId && myClubIdSet.has(post.clubId))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, CLUB_UPDATES_LIMIT);
 
+      const upcomingByClub = await Promise.all(
+        myClubs.map(async (club) => {
+          const events = await getClubEvents(club.id, user.userId, "upcoming");
+          return events.map((event) => ({ event, clubName: clubNameById.get(club.id) }));
+        })
+      );
+      const upcomingFlattened = upcomingByClub.flat();
+      upcomingFlattened.sort((a, b) => {
+        const timeDiff = new Date(a.event.startAt).getTime() - new Date(b.event.startAt).getTime();
+        if (timeDiff !== 0) return timeDiff;
+        return a.event.id.localeCompare(b.event.id);
+      });
+
       setActiveProjects(projectSummaries);
       setProgressSignals(progress);
       setClubUpdates(clubFeedSubset);
+      setUpcomingClubEvents(upcomingFlattened.slice(0, UPCOMING_CLUB_EVENTS_LIMIT));
       setRecentActivity(commonsEvents.slice(0, RECENT_ACTIVITY_LIMIT));
     } catch (err) {
       setMessage((err as Error).message);
       setActiveProjects([]);
       setProgressSignals([]);
       setClubUpdates([]);
+      setUpcomingClubEvents([]);
       setRecentActivity([]);
     } finally {
       setLoading(false);
     }
+  }
+
+  function formatEventStart(isoValue: string): string {
+    const parsed = new Date(isoValue);
+    if (Number.isNaN(parsed.getTime())) return isoValue;
+    return parsed.toLocaleString();
   }
 
   async function handleRefresh() {
@@ -245,7 +285,18 @@ export function HomeScreen({
             {progressSignals.map((event) => (
               <Pressable
                 key={event.id}
-                onPress={() => onNavigate("PROJECTS", event.projectId ? { projectId: event.projectId } : undefined)}
+                onPress={() =>
+                  onNavigate(
+                    "PROJECTS",
+                    event.projectId
+                      ? {
+                          projectId: event.projectId,
+                          focusItemId: event.entityId,
+                          focusItemType: event.eventType === "MILESTONE_COMPLETED" ? "MILESTONE" : "TASK"
+                        }
+                      : undefined
+                  )
+                }
                 style={styles.itemCard}
               >
                 <Text style={styles.itemTitle}>
@@ -269,13 +320,35 @@ export function HomeScreen({
             {clubUpdates.map((post) => (
               <Pressable
                 key={post.postId}
-                onPress={() => onNavigate("CLUBS", post.clubId ? { clubId: post.clubId } : undefined)}
+                onPress={() => onNavigate("CLUBS", post.clubId ? { clubId: post.clubId, postId: post.postId } : undefined)}
                 style={styles.itemCard}
               >
                 <Text style={styles.itemTitle}>@{post.userId}</Text>
                 <Text style={styles.openHint}>Tap to open club</Text>
                 <Text style={styles.itemBody} numberOfLines={2}>{post.text}</Text>
                 <Text style={styles.itemMeta}>{new Date(post.createdAt).toLocaleString()}</Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <View style={styles.sectionCard}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Upcoming Club Events</Text>
+              <Pressable onPress={() => onNavigate("CLUBS")}>
+                <Text style={styles.linkText}>Open Clubs</Text>
+              </Pressable>
+            </View>
+            {upcomingClubEvents.length === 0 ? <Text style={styles.hint}>No upcoming club events.</Text> : null}
+            {upcomingClubEvents.map((entry) => (
+              <Pressable
+                key={entry.event.id}
+                onPress={() => onNavigate("CLUBS", { clubId: entry.event.clubId })}
+                style={styles.itemCard}
+              >
+                <Text style={styles.itemTitle}>{entry.event.title}</Text>
+                {entry.clubName ? <Text style={styles.itemMeta}>Club: {entry.clubName}</Text> : null}
+                <Text style={styles.itemMeta}>Starts: {formatEventStart(entry.event.startAt)}</Text>
+                {entry.event.locationText ? <Text style={styles.itemMeta}>Location: {entry.event.locationText}</Text> : null}
               </Pressable>
             ))}
           </View>
@@ -292,15 +365,32 @@ export function HomeScreen({
               <Pressable
                 key={event.id}
                 onPress={() => {
-                  if (event.projectId) {
-                    onNavigate("PROJECTS", { projectId: event.projectId });
+                  if (event.projectId || event.source === "PROJECTS") {
+                    onNavigate("PROJECTS", {
+                      projectId: event.projectId,
+                      focusItemId:
+                        event.eventType === "MILESTONE_COMPLETED" || event.eventType === "TASK_COMPLETED"
+                          ? event.entityId
+                          : undefined,
+                      focusItemType:
+                        event.eventType === "MILESTONE_COMPLETED"
+                          ? "MILESTONE"
+                          : event.eventType === "TASK_COMPLETED"
+                            ? "TASK"
+                            : undefined
+                    });
                     return;
                   }
                   if (event.clubId) {
-                    onNavigate("CLUBS", { clubId: event.clubId });
+                    onNavigate("CLUBS", {
+                      clubId: event.clubId,
+                      postId: event.entityType === "POST" ? event.entityId : undefined
+                    });
                     return;
                   }
-                  onNavigate("COMMONS");
+                  onNavigate("COMMONS", {
+                    postId: event.entityType === "POST" ? event.entityId : undefined
+                  });
                 }}
                 style={styles.itemCard}
               >

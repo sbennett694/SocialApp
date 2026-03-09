@@ -170,6 +170,8 @@ export type ProjectMilestone = {
   projectId: string;
   title: string;
   status: "OPEN" | "DONE";
+  startAt?: string;
+  dueAt?: string;
   order: number;
   tasks: ProjectMilestoneTask[];
   createdBy: string;
@@ -180,8 +182,28 @@ export type ProjectMilestoneTask = {
   id: string;
   text: string;
   isDone: boolean;
+  startAt?: string;
+  dueAt?: string;
   createdBy: string;
   createdAt: string;
+};
+
+export type TaskTimeEntry = {
+  id: string;
+  taskId: string;
+  userId: string;
+  entryType: "MANUAL";
+  durationMinutes: number;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+};
+
+export type TaskTimeEntriesResponse = {
+  taskId: string;
+  entries: TaskTimeEntry[];
+  taskTotalMinutes: number;
 };
 
 export type ProjectClubLink = {
@@ -198,6 +220,53 @@ export type ClubMember = {
   clubId: string;
   userId: string;
   role: "MEMBER" | "MODERATOR" | "OWNER";
+  createdAt: string;
+};
+
+export type ClubEvent = {
+  id: string;
+  clubId: string;
+  title: string;
+  description?: string;
+  isAllDay?: boolean;
+  startAt: string;
+  endAt?: string;
+  locationText?: string;
+  visibility: "CLUB_MEMBERS" | "PUBLIC_CLUB";
+  status: "SCHEDULED" | "CANCELLED";
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ClubHistoryEventType =
+  | "CLUB_CREATED"
+  | "FOUNDER_RECORDED"
+  | "OWNERSHIP_TRANSFERRED"
+  | "CLUB_SETTINGS_UPDATED"
+  | "CLUB_EVENT_CREATED"
+  | "CLUB_EVENT_UPDATED"
+  | "CLUB_EVENT_CANCELED"
+  | "PROJECT_CREATED_FOR_CLUB"
+  | "MEMBER_ROLE_CHANGED"
+  | "MODERATOR_ADDED"
+  | "MODERATOR_REMOVED"
+  | "MEMBER_REMOVED"
+  | "PROJECT_LINK_REQUESTED"
+  | "PROJECT_LINK_APPROVED"
+  | "PROJECT_LINK_REJECTED"
+  | "PROJECT_LINK_REMOVED";
+
+export type ClubHistoryEvent = {
+  id: string;
+  clubId: string;
+  sequence: number;
+  eventType: ClubHistoryEventType;
+  actorId?: string;
+  subjectUserId?: string;
+  subjectProjectId?: string;
+  metadata?: Record<string, unknown>;
+  visibility: "CLUB_MEMBERS" | "PUBLIC";
   createdAt: string;
 };
 
@@ -681,6 +750,56 @@ export async function getClubMembers(clubId: string): Promise<ClubMember[]> {
   return response.json();
 }
 
+export async function getClubEvents(
+  clubId: string,
+  viewerId: string,
+  timing: "all" | "upcoming" | "past" = "all"
+): Promise<ClubEvent[]> {
+  const query = new URLSearchParams();
+  query.set("viewerId", viewerId);
+  query.set("timing", timing);
+  const response = await apiFetch(`/clubs/${encodeURIComponent(clubId)}/events?${query.toString()}`);
+  if (!response.ok) {
+    throw await extractApiError(response, "Club events load failed");
+  }
+  return response.json();
+}
+
+export async function createClubEvent(
+  clubId: string,
+  input: {
+    actorId: string;
+    title: string;
+    description?: string;
+    isAllDay?: boolean;
+    startAt: string;
+    endAt?: string;
+    locationText?: string;
+    visibility: "CLUB_MEMBERS" | "PUBLIC_CLUB";
+    status?: "SCHEDULED" | "CANCELLED";
+  }
+): Promise<ClubEvent> {
+  const response = await apiFetch(`/clubs/${encodeURIComponent(clubId)}/events`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      actorId: input.actorId,
+      title: input.title,
+      description: input.description,
+      isAllDay: input.isAllDay,
+      startAt: input.startAt,
+      endAt: input.endAt,
+      locationText: input.locationText,
+      visibility: input.visibility,
+      status: input.status ?? "SCHEDULED"
+    })
+  });
+  if (!response.ok) {
+    throw await extractApiError(response, "Create club event failed");
+  }
+  return response.json();
+}
+
 export async function updateClubMemberRole(input: {
   clubId: string;
   memberId: string;
@@ -705,6 +824,16 @@ export async function getClubProjects(clubId: string): Promise<Project[]> {
   const response = await apiFetch(`/clubs/${encodeURIComponent(clubId)}/projects`);
   if (!response.ok) {
     throw new Error(`Club projects load failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getClubHistory(clubId: string, limit = 50): Promise<ClubHistoryEvent[]> {
+  const query = new URLSearchParams();
+  query.set("limit", String(limit));
+  const response = await apiFetch(`/clubs/${encodeURIComponent(clubId)}/history?${query.toString()}`);
+  if (!response.ok) {
+    throw await extractApiError(response, "Club history load failed");
   }
   return response.json();
 }
@@ -775,11 +904,18 @@ export async function createProjectMilestone(input: {
   projectId: string;
   actorId: string;
   title: string;
+  startAt?: string;
+  dueAt?: string;
 }): Promise<ProjectMilestone> {
   const response = await apiFetch(`/projects/${encodeURIComponent(input.projectId)}/milestones`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ actorId: input.actorId, title: input.title })
+    body: JSON.stringify({
+      actorId: input.actorId,
+      title: input.title,
+      startAt: input.startAt,
+      dueAt: input.dueAt
+    })
   });
   if (!response.ok) {
     throw await extractApiError(response, "Project milestone create failed");
@@ -793,13 +929,21 @@ export async function updateProjectMilestone(input: {
   actorId: string;
   title?: string;
   status?: "OPEN" | "DONE";
+  startAt?: string | null;
+  dueAt?: string | null;
 }): Promise<ProjectMilestone> {
   const response = await apiFetch(
     `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}`,
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actorId: input.actorId, title: input.title, status: input.status })
+      body: JSON.stringify({
+        actorId: input.actorId,
+        title: input.title,
+        status: input.status,
+        startAt: input.startAt,
+        dueAt: input.dueAt
+      })
     }
   );
   if (!response.ok) {
@@ -813,13 +957,20 @@ export async function createProjectMilestoneTask(input: {
   milestoneId: string;
   actorId: string;
   text: string;
+  startAt?: string;
+  dueAt?: string;
 }): Promise<ProjectMilestoneTask> {
   const response = await apiFetch(
     `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}/tasks`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actorId: input.actorId, text: input.text })
+      body: JSON.stringify({
+        actorId: input.actorId,
+        text: input.text,
+        startAt: input.startAt,
+        dueAt: input.dueAt
+      })
     }
   );
   if (!response.ok) {
@@ -833,18 +984,118 @@ export async function updateProjectMilestoneTask(input: {
   milestoneId: string;
   taskId: string;
   actorId: string;
-  isDone: boolean;
+  isDone?: boolean;
+  text?: string;
+  startAt?: string | null;
+  dueAt?: string | null;
 }): Promise<ProjectMilestoneTask> {
   const response = await apiFetch(
     `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}/tasks/${encodeURIComponent(input.taskId)}`,
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actorId: input.actorId, isDone: input.isDone })
+      body: JSON.stringify({
+        actorId: input.actorId,
+        isDone: input.isDone,
+        text: input.text,
+        startAt: input.startAt,
+        dueAt: input.dueAt
+      })
     }
   );
   if (!response.ok) {
     throw await extractApiError(response, "Project milestone task update failed");
+  }
+  return response.json();
+}
+
+export async function getTaskTimeEntries(input: {
+  projectId: string;
+  milestoneId: string;
+  taskId: string;
+  viewerId: string;
+}): Promise<TaskTimeEntriesResponse> {
+  const query = new URLSearchParams();
+  query.set("viewerId", input.viewerId);
+  const response = await apiFetch(
+    `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}/tasks/${encodeURIComponent(input.taskId)}/time-entries?${query.toString()}`
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Task time entries load failed");
+  }
+  return response.json();
+}
+
+export async function createTaskTimeEntry(input: {
+  projectId: string;
+  milestoneId: string;
+  taskId: string;
+  actorId: string;
+  durationMinutes: number;
+  note?: string;
+}): Promise<TaskTimeEntry> {
+  const response = await apiFetch(
+    `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}/tasks/${encodeURIComponent(input.taskId)}/time-entries`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actorId: input.actorId,
+        durationMinutes: input.durationMinutes,
+        note: input.note
+      })
+    }
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Task time entry create failed");
+  }
+  return response.json();
+}
+
+export async function updateTaskTimeEntry(input: {
+  projectId: string;
+  milestoneId: string;
+  taskId: string;
+  entryId: string;
+  actorId: string;
+  durationMinutes?: number;
+  note?: string;
+}): Promise<TaskTimeEntry> {
+  const response = await apiFetch(
+    `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}/tasks/${encodeURIComponent(input.taskId)}/time-entries/${encodeURIComponent(input.entryId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actorId: input.actorId,
+        durationMinutes: input.durationMinutes,
+        note: input.note
+      })
+    }
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Task time entry update failed");
+  }
+  return response.json();
+}
+
+export async function deleteTaskTimeEntry(input: {
+  projectId: string;
+  milestoneId: string;
+  taskId: string;
+  entryId: string;
+  actorId: string;
+}): Promise<{ ok: boolean; entryId: string; isDeleted: boolean }> {
+  const response = await apiFetch(
+    `/projects/${encodeURIComponent(input.projectId)}/milestones/${encodeURIComponent(input.milestoneId)}/tasks/${encodeURIComponent(input.taskId)}/time-entries/${encodeURIComponent(input.entryId)}`,
+    {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actorId: input.actorId })
+    }
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Task time entry delete failed");
   }
   return response.json();
 }

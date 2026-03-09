@@ -28,7 +28,7 @@ type ProfileScreenProps = {
   user: AuthUser;
   users: UserBasic[];
   focusUserId?: string;
-  onNavigateToDetail?: (target: "CLUBS" | "PROJECTS", id?: string) => void;
+  onNavigateToDetail?: (target: "COMMONS" | "CLUBS" | "PROJECTS", id?: string) => void;
 };
 
 export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: ProfileScreenProps) {
@@ -232,6 +232,9 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
                   key={item.id}
                   style={styles.card}
                   onPress={() => {
+                    if (item.section === "Commons") {
+                      onNavigateToDetail?.("COMMONS", item.id.replace("post-", ""));
+                    }
                     if (item.section === "Project") {
                       onNavigateToDetail?.("PROJECTS", item.id.replace("project-", ""));
                     }
@@ -242,7 +245,7 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
                 >
                   <Text style={styles.sectionBadge}>{item.section}</Text>
                   <Text style={styles.cardTitle}>{item.title}</Text>
-                  {item.section === "Project" || item.section === "Club" ? <Text style={styles.openHint}>Tap to open {item.section.toLowerCase()}</Text> : null}
+                  <Text style={styles.openHint}>Tap to open {item.section.toLowerCase()}</Text>
                   <Text style={styles.hint}>{item.subtitle}</Text>
                 </Pressable>
               ))}
@@ -250,7 +253,11 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
           ) : null}
 
           {tab === "COMMONS" ? commonsPosts.map((post) => (
-            <View key={post.postId} style={styles.card}><Text style={styles.cardTitle}>{post.text}</Text><Text style={styles.hint}>@{post.userId}</Text></View>
+            <Pressable key={post.postId} style={styles.card} onPress={() => onNavigateToDetail?.("COMMONS", post.postId)}>
+              <Text style={styles.cardTitle}>{post.text}</Text>
+              <Text style={styles.openHint}>Tap to open commons</Text>
+              <Text style={styles.hint}>@{post.userId}</Text>
+            </Pressable>
           )) : null}
 
           {tab === "PROJECTS" ? projects.map((project) => (

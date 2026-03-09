@@ -17,6 +17,95 @@ This document is the architecture source of truth for SocialApp. Future tasks sh
   - Early development optimized for local-first workflows and low AWS spend
 - **Tone/community standards:** positive, hobby-focused, non-political, anti-extremism.
 
+# AI Implementation Contract
+
+This repository is developed using AI-assisted tooling.
+
+The following rules apply to all AI agents working on this codebase (ChatGPT, Cline, or other assistants).
+
+## Architecture Authority
+
+The system architecture defined in this document is the **canonical source of truth**.
+
+If an AI assistant proposes changes that conflict with this architecture, the assistant must:
+
+1. Stop implementation
+2. Ask for clarification
+3. Avoid improvising architectural changes
+
+AI assistants must **not redesign existing systems** without an explicit instruction.
+
+---
+
+## Prompt-Based Development
+
+Development tasks are executed using numbered prompts.
+
+Example sequence:
+
+056 – Club Events Design  
+056B – ClubEvent Backend Foundation  
+056C – Events Tab UI  
+056D – Home Upcoming Events Card  
+
+AI assistants must:
+
+- follow prompts sequentially
+- avoid inventing new prompt numbers
+- avoid expanding prompt scope
+
+---
+
+## Scope Discipline
+
+When implementing a prompt, AI assistants must:
+
+- modify only files required for the prompt
+- avoid unrelated refactors
+- avoid modifying seed systems unless requested
+- avoid introducing new entities or routes
+
+---
+
+## Architecture Drift Protection
+
+AI assistants must not introduce new entities, routes, or systems unless explicitly required by the prompt.
+
+Examples of prohibited drift:
+
+- inventing new event attendance systems
+- introducing global `/events` routes
+- redesigning governance models
+- adding premature feature expansions
+
+If a prompt appears to require architectural changes, the assistant must ask for clarification first.
+
+---
+
+## Build Health Rule
+
+Before architectural review or feature expansion, the project must be build-clean.
+
+Example command:
+
+npm --prefix backend run build
+
+Broken builds must be fixed with minimal cleanup rather than redesign.
+
+---
+
+## Canonical References
+
+AI assistants should use the following documents for guidance:
+
+docs/architecture.md  
+docs/data-model.md  
+docs/AI_CONTEXT.md  
+docs/AI_RULES.md  
+docs/AI_LIMITS.md  
+
+If conflicts occur, `architecture.md` takes precedence.
+
 ## Tech Stack
 - **Frontend framework:** React Native + Expo + TypeScript (`mobile/`)
 - **Backend framework/services:** Node.js + Express TypeScript local API (`backend/src/localServer.ts`)
@@ -37,7 +126,7 @@ This document is the architecture source of truth for SocialApp. Future tasks sh
 Top-level app structure (`mobile/App.tsx`):
 - **Home**: dashboard-style landing screen with capped sections (active projects, change summary, project progress signals, club updates, recent activity, notifications preview)
 - **Commons**: main feed + composer + thread responses
-- **Clubs**: 3-tab clubs hub (`My Clubs`, `Discover`, `Club Feed`) plus per-club detail tabs (`Highlights`, `Members`, `Projects`, `Project Requests` for owner/admin)
+- **Clubs**: 3-tab clubs hub (`My Clubs`, `Discover`, `Club Feed`) plus per-club detail tabs (`Highlights`, `Members`, `Projects`, `Project Requests` for owner/admin, `History` audit timeline)
 - **Projects**: project detail, milestones, tasks, highlights, project-club links
 - **Notifications**: personalized notifications list for viewer-relevant activity
 - **Profile**: user profile content tabs + unified **All** view (aggregated Commons + Projects + Clubs) + network management kept separate
@@ -139,6 +228,7 @@ High-value route groups:
 - **Clubs:** `/clubs`, `/clubs/:clubId/*`
 - **Projects:** `/projects`, `/projects/:projectId/*`, milestones/tasks/highlights
 - **Project-club links:** `/projects/:projectId/clubs` + review route
+- **Club governance history:** `/clubs/:clubId/history` (read-only, newest-first, limitable)
 - **Engagement/moderation:** `/comments`, `/reactions`, `/reports`, `/admin/*`, `/moderation/check`
 
 Notes:
@@ -148,6 +238,26 @@ Notes:
 - repository mode abstraction keeps current in-memory behavior while preparing for `file`/`sqlite` and future `dynamodb` adapters
 - Commons migration path is dual-read: `/feed/commons` defaults to legacy posts; `mode=events` enables FeedEvent-based response with optional `shape=legacy` adaptation for existing UI safety.
 - Club creation now records governance history baseline events (`CLUB_CREATED`, `FOUNDER_RECORDED`) in ClubHistory.
+- Club governance operations now emit ClubHistory events for ownership transfer, moderator/member role changes, member removal, and project-link lifecycle changes.
+- Club-owned project creation now preserves `Project.createdBy` for user accountability and emits `PROJECT_CREATED_FOR_CLUB` in ClubHistory.
+- Governance events remain out of `FeedEvent`; notifications are now limited to meaningful personal governance signals.
+
+### Club Governance Behavior (Backend)
+- Ownership transfer route: `PATCH /clubs/:clubId/ownership`
+  - only current owner can transfer ownership
+  - founder identity is immutable
+  - transfer is atomic in service logic (`OWNER` -> fallback role, new member -> `OWNER`)
+  - exactly-one-owner invariant is enforced after transfer
+- Role governance route: `PATCH /clubs/:clubId/members/:memberId/role`
+  - owner can promote/demote between `MEMBER` and `MODERATOR`
+  - owner role cannot be changed through this endpoint
+- Member removal route: `DELETE /clubs/:clubId/members/:memberId`
+  - owner/moderator can remove eligible members
+  - current owner cannot be removed
+
+### Governance Notification Relevance
+- Notifications include personal governance events only (ownership transferred to you, promoted/demoted moderator status for you, removed-from-club for you).
+- Low-value/non-personal governance events are not notified and are represented in ClubHistory.
 
 ### Backend Source Structure (Current)
 ```text
@@ -189,7 +299,7 @@ backend/src/
 - `mobile/src/api/client.ts`: typed API client and route wrappers
 - `mobile/src/screens/FeedScreen.tsx`: event-backed commons activity cards + composer + threaded responses for post-backed events + lightweight feed-type filter bar (All/Posts/Projects/Progress), including tile press routing hints (project/club/post context) and response toggle counts/expand-collapse behavior
 - `mobile/src/screens/NotificationsScreen.tsx`: personalized notifications list with lightweight unread/read visual state and tap-through routing to relevant tab
-- `mobile/src/screens/ClubsScreen.tsx`: clubs 3-tab hub + club detail management flows (membership roles, highlight posting, project request review)
+- `mobile/src/screens/ClubsScreen.tsx`: clubs 3-tab hub + club detail management flows (membership roles, highlight posting, project request review, history timeline, and creator accountability display for club projects)
 - `mobile/src/screens/ProjectsScreen.tsx`: project detail and workflow UIs
 - `mobile/src/components/CategorySelectorField.tsx`: shared searchable category selector used by create modals (club/project)
 - `mobile/src/screens/ProfileScreen.tsx`: profile content tabs + unified All content aggregator (Commons/Projects/Clubs) with Network management remaining separate

@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Animated, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import DateTimePicker, { DateTimePickerAndroid, DateTimePickerEvent } from "@react-native-community/datetimepicker";
+import { Calendar, DateData } from "react-native-calendars";
 import {
   Club,
+  ClubEvent,
+  ClubHistoryEvent,
   ClubMember,
+  createClubEvent,
   createPost,
   createClub,
   getCategories,
+  getClubEvents,
+  getClubHistory,
   getProjectClubLinks,
   getClubMembers,
   getClubProjects,
@@ -23,11 +30,16 @@ import {
 } from "../api/client";
 import { AuthUser } from "../auth/session";
 import { CategorySelectorField } from "../components/CategorySelectorField";
+import { useTemporaryHighlight } from "../lib/useTemporaryHighlight";
 
 type ClubsScreenProps = {
   user: AuthUser;
   rootResetSignal?: number;
   focusClubId?: string;
+  focusClubPostId?: string;
+  onFocusClubConsumed?: (clubId: string) => void;
+  onFocusClubPostConsumed?: (postId: string) => void;
+  onBackToClubsRoot?: () => void;
   onNavigateToProject?: (projectId: string) => void;
 };
 
@@ -36,7 +48,27 @@ type ClubProjectRequest = {
   link: ProjectClubLink;
 };
 
-export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigateToProject }: ClubsScreenProps) {
+export function ClubsScreen({
+  user,
+  rootResetSignal = 0,
+  focusClubId,
+  focusClubPostId,
+  onFocusClubConsumed,
+  onFocusClubPostConsumed,
+  onBackToClubsRoot,
+  onNavigateToProject
+}: ClubsScreenProps) {
+  const clubHighlightsListRef = useRef<FlatList<Post> | null>(null);
+  const {
+    highlightedId: highlightedClubId,
+    triggerHighlight: triggerClubHighlight,
+    emphasisAnimatedStyle: clubEmphasisAnimatedStyle
+  } = useTemporaryHighlight(1800);
+  const {
+    highlightedId: highlightedClubPostId,
+    triggerHighlight: triggerClubPostHighlight,
+    emphasisAnimatedStyle: clubPostEmphasisAnimatedStyle
+  } = useTemporaryHighlight(1800);
   const [clubsPageTab, setClubsPageTab] = useState<"MY_CLUBS" | "DISCOVER" | "CLUB_FEED">("MY_CLUBS");
   const [clubs, setClubs] = useState<Club[]>([]);
   const [myClubs, setMyClubs] = useState<Club[]>([]);
@@ -63,13 +95,31 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
   const [editClubDescription, setEditClubDescription] = useState("");
   const [editClubIsPublic, setEditClubIsPublic] = useState(true);
 
+  const [createEventModalOpen, setCreateEventModalOpen] = useState(false);
+  const [newEventTitle, setNewEventTitle] = useState("");
+  const [newEventDescription, setNewEventDescription] = useState("");
+  const [newEventIsAllDay, setNewEventIsAllDay] = useState(false);
+  const [newEventStartAt, setNewEventStartAt] = useState<Date | null>(null);
+  const [newEventEndAt, setNewEventEndAt] = useState<Date | null>(null);
+  const [newEventLocationText, setNewEventLocationText] = useState("");
+  const [newEventVisibility, setNewEventVisibility] = useState<"CLUB_MEMBERS" | "PUBLIC_CLUB">("CLUB_MEMBERS");
+  const [dateTimePickerOpen, setDateTimePickerOpen] = useState(false);
+  const [dateTimePickerTarget, setDateTimePickerTarget] = useState<"start" | "end">("start");
+  const [dateTimePickerMode, setDateTimePickerMode] = useState<"date" | "time">("date");
+  const [dateTimePickerDraft, setDateTimePickerDraft] = useState<Date>(new Date());
+
   const [viewingClub, setViewingClub] = useState<Club | null>(null);
-  const [clubDetailTab, setClubDetailTab] = useState<"HIGHLIGHTS" | "MEMBERS" | "PROJECTS" | "PROJECT_REQUESTS">("HIGHLIGHTS");
+  const [clubDetailTab, setClubDetailTab] = useState<"HIGHLIGHTS" | "MEMBERS" | "PROJECTS" | "PROJECT_REQUESTS" | "EVENTS" | "HISTORY">("HIGHLIGHTS");
+  const [eventsViewMode, setEventsViewMode] = useState<"LIST" | "CALENDAR">("LIST");
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [clubMembers, setClubMembers] = useState<ClubMember[]>([]);
   const [clubProjects, setClubProjects] = useState<Project[]>([]);
+  const [clubEvents, setClubEvents] = useState<ClubEvent[]>([]);
+  const [clubHistoryEvents, setClubHistoryEvents] = useState<ClubHistoryEvent[]>([]);
   const [clubProjectRequests, setClubProjectRequests] = useState<ClubProjectRequest[]>([]);
   const [clubDetailLoading, setClubDetailLoading] = useState(false);
   const [clubHighlightText, setClubHighlightText] = useState("");
+  const [pendingFocusClubPostId, setPendingFocusClubPostId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -120,8 +170,40 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
     const target = [...myClubs, ...clubs, ...joinableClubs].find((club) => club.id === focusClubId);
     if (!target) return;
     if (viewingClub?.id === target.id) return;
+    if (!focusClubPostId) {
+      triggerClubHighlight(target.id);
+    }
+    onFocusClubConsumed?.(target.id);
     void openClubDetail(target);
-  }, [focusClubId, myClubs, clubs, joinableClubs, viewingClub?.id]);
+  }, [focusClubId, focusClubPostId, onFocusClubConsumed, myClubs, clubs, joinableClubs, viewingClub?.id]);
+
+  useEffect(() => {
+    if (!focusClubPostId) return;
+    setPendingFocusClubPostId(focusClubPostId);
+  }, [focusClubPostId]);
+
+  useEffect(() => {
+    if (!pendingFocusClubPostId || !viewingClub) return;
+    const targetIndex = detailClubFeed.findIndex((post) => post.postId === pendingFocusClubPostId);
+    if (targetIndex < 0) return;
+
+    if (clubDetailTab !== "HIGHLIGHTS") {
+      setClubDetailTab("HIGHLIGHTS");
+      return;
+    }
+
+    clubHighlightsListRef.current?.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.3 });
+    triggerClubPostHighlight(pendingFocusClubPostId);
+    onFocusClubPostConsumed?.(pendingFocusClubPostId);
+    setPendingFocusClubPostId(null);
+  }, [
+    clubDetailTab,
+    detailClubFeed,
+    onFocusClubPostConsumed,
+    pendingFocusClubPostId,
+    triggerClubPostHighlight,
+    viewingClub
+  ]);
 
   async function handleJoinClub(clubId: string, clubName: string) {
     try {
@@ -162,14 +244,18 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
     setClubDetailTab("HIGHLIGHTS");
     setClubDetailLoading(true);
     try {
-      const [members, projects, clubPosts] = await Promise.all([
+      const [members, projects, clubPosts, history, events] = await Promise.all([
         getClubMembers(club.id),
         getClubProjects(club.id),
-        getClubsFeed(user.userId, club.id)
+        getClubsFeed(user.userId, club.id),
+        getClubHistory(club.id, 50),
+        getClubEvents(club.id, user.userId, "all")
       ]);
       setClubMembers(members);
       setClubProjects(projects);
       setDetailClubFeed(clubPosts);
+      setClubHistoryEvents(history);
+      setClubEvents(events);
 
       const viewerRole = members.find((member) => member.userId === user.userId)?.role;
       const canManage = viewerRole === "OWNER" || viewerRole === "MODERATOR";
@@ -289,6 +375,238 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
     }
   }
 
+  function openCreateEventModal() {
+    setNewEventTitle("");
+    setNewEventDescription("");
+    setNewEventIsAllDay(false);
+    setNewEventStartAt(null);
+    setNewEventEndAt(null);
+    setNewEventLocationText("");
+    setNewEventVisibility(viewingClub?.isPublic ? "PUBLIC_CLUB" : "CLUB_MEMBERS");
+    setCreateEventModalOpen(true);
+  }
+
+  function openDateTimePicker(target: "start" | "end") {
+    const baseDate =
+      target === "start" ? newEventStartAt ?? new Date() : newEventEndAt ?? newEventStartAt ?? new Date();
+
+    if (Platform.OS === "android") {
+      const openAndroidPicker = (reopenCreateEventModal: boolean) => {
+        DateTimePickerAndroid.open({
+          value: baseDate,
+          mode: "date",
+          is24Hour: true,
+          onChange: (dateEvent, pickedDate) => {
+            if (dateEvent.type === "dismissed" || !pickedDate) {
+              if (reopenCreateEventModal) setCreateEventModalOpen(true);
+              return;
+            }
+
+            const withDate = new Date(baseDate);
+            withDate.setFullYear(pickedDate.getFullYear(), pickedDate.getMonth(), pickedDate.getDate());
+
+            DateTimePickerAndroid.open({
+              value: withDate,
+              mode: newEventIsAllDay ? "date" : "time",
+              is24Hour: true,
+              onChange: (timeEvent, pickedTime) => {
+                if (timeEvent.type === "dismissed" || !pickedTime) {
+                  if (reopenCreateEventModal) setCreateEventModalOpen(true);
+                  return;
+                }
+                const combined = new Date(withDate);
+                if (newEventIsAllDay) {
+                  combined.setHours(0, 0, 0, 0);
+                } else {
+                  combined.setHours(pickedTime.getHours(), pickedTime.getMinutes(), 0, 0);
+                }
+                if (target === "start") {
+                  setNewEventStartAt(combined);
+                } else {
+                  setNewEventEndAt(combined);
+                }
+                if (reopenCreateEventModal) setCreateEventModalOpen(true);
+              }
+            });
+          }
+        });
+      };
+
+      if (createEventModalOpen) {
+        setCreateEventModalOpen(false);
+        setTimeout(() => openAndroidPicker(true), 100);
+      } else {
+        openAndroidPicker(false);
+      }
+
+      return;
+    }
+
+    setDateTimePickerTarget(target);
+    setDateTimePickerMode("date");
+    setDateTimePickerDraft(baseDate);
+    setDateTimePickerOpen(true);
+  }
+
+  function formatDateTimeLocalValue(value: Date | null): string {
+    if (!value) return "";
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    const hours = String(value.getHours()).padStart(2, "0");
+    const minutes = String(value.getMinutes()).padStart(2, "0");
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }
+
+  function formatDateLocalValue(value: Date | null): string {
+    if (!value) return "";
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function parseDateTimeLocalValue(raw: string): Date | null {
+    if (!raw) return null;
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function parseDateLocalValue(raw: string): Date | null {
+    if (!raw) return null;
+    const [yearRaw, monthRaw, dayRaw] = raw.split("-");
+    const year = Number(yearRaw);
+    const month = Number(monthRaw);
+    const day = Number(dayRaw);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+    return new Date(year, month - 1, day, 0, 0, 0, 0);
+  }
+
+  function handleWebStartDateTimeChange(event: ChangeEvent<HTMLInputElement>) {
+    setNewEventStartAt(parseDateTimeLocalValue(event.target.value));
+  }
+
+  function handleWebStartDateChange(event: ChangeEvent<HTMLInputElement>) {
+    setNewEventStartAt(parseDateLocalValue(event.target.value));
+  }
+
+  function handleWebEndDateTimeChange(event: ChangeEvent<HTMLInputElement>) {
+    setNewEventEndAt(parseDateTimeLocalValue(event.target.value));
+  }
+
+  function handleWebEndDateChange(event: ChangeEvent<HTMLInputElement>) {
+    setNewEventEndAt(parseDateLocalValue(event.target.value));
+  }
+
+  function handleDateTimePickerChange(event: DateTimePickerEvent, selectedDate?: Date) {
+    if (event.type === "dismissed") {
+      setDateTimePickerOpen(false);
+      setDateTimePickerMode("date");
+      return;
+    }
+
+    if (!selectedDate) return;
+
+    if (Platform.OS === "android") {
+      if (dateTimePickerMode === "date") {
+        setDateTimePickerDraft(selectedDate);
+        setDateTimePickerMode("time");
+        return;
+      }
+
+      const combined = new Date(dateTimePickerDraft);
+      if (newEventIsAllDay) {
+        combined.setHours(0, 0, 0, 0);
+      } else {
+        combined.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
+      }
+      if (dateTimePickerTarget === "start") {
+        setNewEventStartAt(combined);
+      } else {
+        setNewEventEndAt(combined);
+      }
+      setDateTimePickerOpen(false);
+      setDateTimePickerMode("date");
+      return;
+    }
+
+    const picked = new Date(selectedDate);
+    if (newEventIsAllDay) {
+      picked.setHours(0, 0, 0, 0);
+    }
+    if (dateTimePickerTarget === "start") {
+      setNewEventStartAt(picked);
+    } else {
+      setNewEventEndAt(picked);
+    }
+    setDateTimePickerOpen(false);
+    setDateTimePickerMode("date");
+  }
+
+  function formatEventInputDate(value: Date | null, placeholder: string): string {
+    if (!value) return placeholder;
+    return newEventIsAllDay ? value.toLocaleDateString() : value.toLocaleString();
+  }
+
+  async function handleCreateEvent() {
+    if (!viewingClub) return;
+
+    if (!newEventTitle.trim()) {
+      setMessage("Event title is required.");
+      return;
+    }
+
+    if (!newEventStartAt) {
+      setMessage("Start date/time is required.");
+      return;
+    }
+    const normalizedStart = new Date(newEventStartAt);
+    if (newEventIsAllDay) {
+      normalizedStart.setHours(0, 0, 0, 0);
+    }
+    const startAtIso = normalizedStart.toISOString();
+
+    let endAtIso: string | undefined;
+    if (newEventEndAt) {
+      const normalizedEnd = new Date(newEventEndAt);
+      if (newEventIsAllDay) {
+        normalizedEnd.setHours(0, 0, 0, 0);
+      }
+
+      if (normalizedEnd.getTime() < normalizedStart.getTime()) {
+        setMessage("End date/time must be after start date/time.");
+        return;
+      }
+      endAtIso = normalizedEnd.toISOString();
+    }
+
+    if (newEventVisibility === "PUBLIC_CLUB" && !viewingClub.isPublic) {
+      setMessage("Private clubs can only create members-only events.");
+      return;
+    }
+
+    try {
+      await createClubEvent(viewingClub.id, {
+        actorId: user.userId,
+        title: newEventTitle.trim(),
+        description: newEventDescription.trim() || undefined,
+        isAllDay: newEventIsAllDay,
+        startAt: startAtIso,
+        endAt: endAtIso,
+        locationText: newEventLocationText.trim() || undefined,
+        visibility: newEventVisibility,
+        status: "SCHEDULED"
+      });
+
+      setCreateEventModalOpen(false);
+      setMessage("Event created.");
+      await openClubDetail(viewingClub);
+      setClubDetailTab("EVENTS");
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  }
+
   const discoverCategoryFilteredClubs = useMemo(
     () => (discoverCategoryId ? clubs.filter((club) => club.categoryId === discoverCategoryId) : clubs),
     [clubs, discoverCategoryId]
@@ -330,6 +648,139 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
     : null;
   const canManageClub = viewerMembership?.role === "OWNER" || viewerMembership?.role === "MODERATOR";
   const isOwner = viewerMembership?.role === "OWNER";
+  const sortedClubEvents = [...clubEvents].sort((a, b) => {
+    const timeDiff = new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return a.id.localeCompare(b.id);
+  });
+  const nowTimestamp = Date.now();
+  const upcomingClubEvents = sortedClubEvents.filter((event) => new Date(event.startAt).getTime() >= nowTimestamp);
+  const pastClubEvents = sortedClubEvents.filter((event) => new Date(event.startAt).getTime() < nowTimestamp);
+
+  function toLocalDateKey(rawDate: string): string | null {
+    const parsed = new Date(rawDate);
+    if (Number.isNaN(parsed.getTime())) return null;
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  const selectedDayEvents = sortedClubEvents.filter((event) => toLocalDateKey(event.startAt) === selectedCalendarDate);
+
+  const calendarMarkedDates = sortedClubEvents.reduce<Record<string, { marked?: boolean; selected?: boolean; selectedColor?: string }>>(
+    (acc, event) => {
+      const dayKey = toLocalDateKey(event.startAt);
+      if (!dayKey) return acc;
+      acc[dayKey] = {
+        ...(acc[dayKey] ?? {}),
+        marked: true
+      };
+      return acc;
+    },
+    {
+      [selectedCalendarDate]: {
+        selected: true,
+        selectedColor: "#111"
+      }
+    }
+  );
+
+  if (calendarMarkedDates[selectedCalendarDate]) {
+    calendarMarkedDates[selectedCalendarDate] = {
+      ...calendarMarkedDates[selectedCalendarDate],
+      selected: true,
+      selectedColor: "#111"
+    };
+  }
+
+  function formatEventDateRange(event: ClubEvent): string {
+    const start = new Date(event.startAt);
+    const end = event.endAt ? new Date(event.endAt) : null;
+    if (Number.isNaN(start.getTime())) return event.startAt;
+
+    if (event.isAllDay) {
+      const startText = start.toLocaleDateString();
+      if (!end || Number.isNaN(end.getTime())) return `${startText} • All day`;
+      return `${startText} → ${end.toLocaleDateString()} • All day`;
+    }
+
+    const startText = start.toLocaleString();
+    if (!end || Number.isNaN(end.getTime())) return startText;
+    return `${startText} → ${end.toLocaleString()}`;
+  }
+
+  function getHistoryProjectTitle(event: ClubHistoryEvent): string {
+    const metadataProjectTitle = event.metadata?.projectTitle;
+    if (typeof metadataProjectTitle === "string" && metadataProjectTitle.trim()) {
+      return metadataProjectTitle.trim();
+    }
+
+    if (event.subjectProjectId) {
+      const project = clubProjects.find((item) => item.id === event.subjectProjectId);
+      if (project?.title) return project.title;
+      return event.subjectProjectId;
+    }
+
+    return "project";
+  }
+
+  function formatHistorySummary(event: ClubHistoryEvent): string {
+    const actor = event.actorId ? `@${event.actorId}` : "Someone";
+    const subjectUser = event.subjectUserId ? `@${event.subjectUserId}` : "a member";
+    const projectTitle = getHistoryProjectTitle(event);
+
+    switch (event.eventType) {
+      case "CLUB_CREATED":
+        return "Club created";
+      case "FOUNDER_RECORDED":
+        return "Founder recorded";
+      case "CLUB_EVENT_CREATED": {
+        const title = typeof event.metadata?.title === "string" ? event.metadata.title : "event";
+        return `${actor} created event '${title}'`;
+      }
+      case "CLUB_EVENT_UPDATED": {
+        const title = typeof event.metadata?.title === "string" ? event.metadata.title : "event";
+        return `${actor} updated event '${title}'`;
+      }
+      case "CLUB_EVENT_CANCELED": {
+        const title = typeof event.metadata?.title === "string" ? event.metadata.title : "event";
+        return `${actor} canceled event '${title}'`;
+      }
+      case "OWNERSHIP_TRANSFERRED":
+        return `${actor} transferred ownership to ${subjectUser}`;
+      case "MODERATOR_ADDED":
+        return `${actor} promoted ${subjectUser} to moderator`;
+      case "MODERATOR_REMOVED":
+        return `${actor} removed ${subjectUser} as moderator`;
+      case "MEMBER_ROLE_CHANGED":
+        return `${actor} changed ${subjectUser}'s role`;
+      case "MEMBER_REMOVED":
+        return `${actor} removed ${subjectUser} from the club`;
+      case "PROJECT_LINK_REQUESTED":
+        return `${actor} requested to link project '${projectTitle}'`;
+      case "PROJECT_CREATED_FOR_CLUB":
+        return `${actor} created club project '${projectTitle}'`;
+      case "PROJECT_LINK_APPROVED":
+        return `${actor} approved project '${projectTitle}'`;
+      case "PROJECT_LINK_REJECTED":
+        return `${actor} rejected project '${projectTitle}'`;
+      case "PROJECT_LINK_REMOVED":
+        return `${actor} removed project '${projectTitle}'`;
+      case "CLUB_SETTINGS_UPDATED":
+        return `${actor} updated club settings`;
+      default:
+        return "Governance activity updated";
+    }
+  }
+
+  function getHistoryIcon(eventType: ClubHistoryEvent["eventType"]): string {
+    if (eventType.includes("OWNERSHIP")) return "👑";
+    if (eventType.includes("CLUB_EVENT")) return "📅";
+    if (eventType.includes("MODERATOR") || eventType.includes("MEMBER")) return "👥";
+    if (eventType.includes("PROJECT")) return "🧩";
+    return "🕘";
+  }
 
   if (viewingClub) {
     return (
@@ -339,15 +790,28 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View>
-            <Pressable onPress={() => setViewingClub(null)} style={styles.buttonInline}>
+            <Pressable
+              onPress={() => {
+                setViewingClub(null);
+                onBackToClubsRoot?.();
+              }}
+              style={styles.buttonInline}
+            >
               <Text style={styles.buttonText}>← Back to Clubs</Text>
             </Pressable>
 
-            <View style={styles.card}>
+            <Animated.View
+              style={[
+                styles.card,
+                highlightedClubId === viewingClub.id ? styles.focusedTargetCard : null,
+                highlightedClubId === viewingClub.id ? clubEmphasisAnimatedStyle : null
+              ]}
+            >
               <Text style={styles.sectionTitle}>{viewingClub.name}</Text>
               <Text style={styles.hint}>Founder: @{viewingClub.ownerId ?? "unknown"}</Text>
               <Text style={styles.hint}>{viewingClub.description || "No club description yet."}</Text>
-            </View>
+            </Animated.View>
+            {message ? <Text style={styles.message}>{message}</Text> : null}
 
             <View style={styles.rowWrap}>
               <Pressable
@@ -378,6 +842,18 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
                   </Text>
                 </Pressable>
               ) : null}
+              <Pressable
+                onPress={() => setClubDetailTab("HISTORY")}
+                style={[styles.pill, clubDetailTab === "HISTORY" && styles.pillActive]}
+              >
+                <Text style={[styles.pillText, clubDetailTab === "HISTORY" && styles.pillTextActive]}>History</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setClubDetailTab("EVENTS")}
+                style={[styles.pill, clubDetailTab === "EVENTS" && styles.pillActive]}
+              >
+                <Text style={[styles.pillText, clubDetailTab === "EVENTS" && styles.pillTextActive]}>Events</Text>
+              </Pressable>
             </View>
 
             {clubDetailLoading ? <ActivityIndicator style={{ marginTop: 12 }} /> : null}
@@ -400,14 +876,27 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
                   </View>
                 ) : null}
                 {detailClubFeed.length === 0 ? <Text style={styles.hint}>No club posts yet.</Text> : null}
-                {detailClubFeed.map((post) => (
-                  <View key={`club-feed-${post.postId}`} style={styles.card}>
-                    <Text style={styles.clubName}>
-                      {post.postedAsClub ? `@${viewingClub.name} by ${post.clubActorId ?? post.userId}` : `@${post.userId}`}
-                    </Text>
-                    <Text>{post.text}</Text>
-                  </View>
-                ))}
+                <FlatList
+                  ref={clubHighlightsListRef}
+                  data={detailClubFeed}
+                  keyExtractor={(post) => `club-feed-${post.postId}`}
+                  style={styles.clubHighlightsList}
+                  nestedScrollEnabled
+                  onScrollToIndexFailed={() => {
+                    clubHighlightsListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                  }}
+                  renderItem={({ item: post }) => {
+                    const focused = highlightedClubPostId === post.postId;
+                    return (
+                      <Animated.View style={[styles.card, focused ? styles.focusedTargetItem : null, focused ? clubPostEmphasisAnimatedStyle : null]}>
+                        <Text style={styles.clubName}>
+                          {post.postedAsClub ? `@${viewingClub.name} by ${post.clubActorId ?? post.userId}` : `@${post.userId}`}
+                        </Text>
+                        <Text>{post.text}</Text>
+                      </Animated.View>
+                    );
+                  }}
+                />
               </>
             ) : null}
 
@@ -459,6 +948,7 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
                     <Text style={styles.openHint}>Tap to open project</Text>
                     <Text style={styles.hint}>{item.description || "No description"}</Text>
                     <Text style={styles.hint}>Owner: @{item.ownerId}</Text>
+                    {item.createdBy ? <Text style={styles.hint}>Created by: @{item.createdBy}</Text> : null}
                   </Pressable>
                 ))}
               </>
@@ -497,6 +987,271 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
                   : <Text style={styles.hint}>Only club owner/admin can review requests.</Text>}
               </>
             ) : null}
+
+            {clubDetailTab === "HISTORY" ? (
+              <>
+                <Text style={styles.sectionTitle}>History</Text>
+                {clubHistoryEvents.length === 0 ? <Text style={styles.hint}>No governance activity yet.</Text> : null}
+                {clubHistoryEvents.map((event, index) => (
+                  <View
+                    key={`club-history-${event.id}`}
+                    style={[styles.historyRow, index === clubHistoryEvents.length - 1 && styles.historyRowLast]}
+                  >
+                    <Text style={styles.historyIcon}>{getHistoryIcon(event.eventType)}</Text>
+                    <View style={styles.historyBody}>
+                      <Text style={styles.historySummary}>{formatHistorySummary(event)}</Text>
+                      <Text style={styles.historyTimestamp}>{new Date(event.createdAt).toLocaleString()}</Text>
+                    </View>
+                  </View>
+                ))}
+              </>
+            ) : null}
+
+            {clubDetailTab === "EVENTS" ? (
+              <>
+                <Text style={styles.sectionTitle}>Events</Text>
+                <View style={styles.rowWrap}>
+                  <Pressable
+                    onPress={() => setEventsViewMode("LIST")}
+                    style={[styles.pill, eventsViewMode === "LIST" && styles.pillActive]}
+                  >
+                    <Text style={[styles.pillText, eventsViewMode === "LIST" && styles.pillTextActive]}>List</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setEventsViewMode("CALENDAR")}
+                    style={[styles.pill, eventsViewMode === "CALENDAR" && styles.pillActive]}
+                  >
+                    <Text style={[styles.pillText, eventsViewMode === "CALENDAR" && styles.pillTextActive]}>Calendar</Text>
+                  </Pressable>
+                </View>
+                {canManageClub ? (
+                  <View style={styles.card}>
+                    <Text style={styles.hint}>You can manage club events.</Text>
+                    <Pressable onPress={openCreateEventModal} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Create Event</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {eventsViewMode === "LIST" ? (
+                  <>
+                    {upcomingClubEvents.length === 0 ? <Text style={styles.hint}>No upcoming events yet.</Text> : null}
+                    {upcomingClubEvents.map((event) => (
+                      <View key={`club-event-upcoming-${event.id}`} style={styles.card}>
+                        <Text style={styles.clubName}>{event.title}</Text>
+                        <Text style={styles.hint}>{formatEventDateRange(event)}</Text>
+                        {event.locationText ? <Text style={styles.hint}>📍 {event.locationText}</Text> : null}
+                        <Text style={styles.hint}>Status: {event.status}</Text>
+                      </View>
+                    ))}
+
+                    {pastClubEvents.length > 0 ? <Text style={styles.filterLabel}>Past events</Text> : null}
+                    {pastClubEvents.map((event) => (
+                      <View key={`club-event-past-${event.id}`} style={styles.card}>
+                        <Text style={styles.clubName}>{event.title}</Text>
+                        <Text style={styles.hint}>{formatEventDateRange(event)}</Text>
+                        {event.locationText ? <Text style={styles.hint}>📍 {event.locationText}</Text> : null}
+                        <Text style={styles.hint}>Status: {event.status}</Text>
+                      </View>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.card}>
+                      <Calendar
+                        onDayPress={(day: DateData) => setSelectedCalendarDate(day.dateString)}
+                        markedDates={calendarMarkedDates}
+                      />
+                    </View>
+                    <Text style={styles.filterLabel}>Events on {selectedCalendarDate}</Text>
+                    {selectedDayEvents.length === 0 ? (
+                      <Text style={styles.hint}>No events scheduled for this day.</Text>
+                    ) : null}
+                    {selectedDayEvents.map((event) => (
+                      <View key={`club-event-day-${event.id}`} style={styles.card}>
+                        <Text style={styles.clubName}>{event.title}</Text>
+                        <Text style={styles.hint}>{formatEventDateRange(event)}</Text>
+                        {event.locationText ? <Text style={styles.hint}>📍 {event.locationText}</Text> : null}
+                        <Text style={styles.hint}>Status: {event.status}</Text>
+                      </View>
+                    ))}
+                  </>
+                )}
+              </>
+            ) : null}
+
+            <Modal
+              visible={createEventModalOpen}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setCreateEventModalOpen(false)}
+            >
+              <View style={styles.modalBackdrop}>
+                <View style={styles.modalCard}>
+                  <Text style={styles.sectionTitle}>Create Event</Text>
+                  <ScrollView
+                    style={styles.modalScroll}
+                    contentContainerStyle={styles.modalScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator
+                  >
+                    <TextInput
+                      value={newEventTitle}
+                      onChangeText={setNewEventTitle}
+                      placeholder="Title"
+                      style={styles.input}
+                    />
+                    <TextInput
+                      value={newEventDescription}
+                      onChangeText={setNewEventDescription}
+                      placeholder="Description (optional)"
+                      style={styles.input}
+                    />
+                    <TextInput
+                      value={newEventLocationText}
+                      onChangeText={setNewEventLocationText}
+                      placeholder="Location (optional)"
+                      style={styles.input}
+                    />
+
+                    <Text style={styles.filterLabel}>Type</Text>
+                    <View style={styles.rowWrap}>
+                      <Pressable
+                        onPress={() => setNewEventIsAllDay(false)}
+                        style={[styles.pill, !newEventIsAllDay && styles.pillActive]}
+                      >
+                        <Text style={[styles.pillText, !newEventIsAllDay && styles.pillTextActive]}>Timed</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setNewEventIsAllDay(true)}
+                        style={[styles.pill, newEventIsAllDay && styles.pillActive]}
+                      >
+                        <Text style={[styles.pillText, newEventIsAllDay && styles.pillTextActive]}>All-day</Text>
+                      </Pressable>
+                    </View>
+
+                    <Text style={styles.filterLabel}>Start</Text>
+                    {Platform.OS === "web" ? (
+                      newEventIsAllDay ? (
+                        <input
+                          type="date"
+                          value={formatDateLocalValue(newEventStartAt)}
+                          onChange={handleWebStartDateChange}
+                          style={{
+                            border: "1px solid #ccc",
+                            borderRadius: 8,
+                            padding: 10,
+                            marginBottom: 8,
+                            width: "100%",
+                            boxSizing: "border-box"
+                          }}
+                        />
+                      ) : (
+                        <input
+                          type="datetime-local"
+                          value={formatDateTimeLocalValue(newEventStartAt)}
+                          onChange={handleWebStartDateTimeChange}
+                          style={{
+                            border: "1px solid #ccc",
+                            borderRadius: 8,
+                            padding: 10,
+                            marginBottom: 8,
+                            width: "100%",
+                            boxSizing: "border-box"
+                          }}
+                        />
+                      )
+                    ) : (
+                      <Pressable onPress={() => openDateTimePicker("start")} style={styles.input}>
+                        <Text>{formatEventInputDate(newEventStartAt, newEventIsAllDay ? "Select start date" : "Select start date/time")}</Text>
+                      </Pressable>
+                    )}
+
+                    <Text style={styles.filterLabel}>End (optional)</Text>
+                    {Platform.OS === "web" ? (
+                      newEventIsAllDay ? (
+                        <input
+                          type="date"
+                          value={formatDateLocalValue(newEventEndAt)}
+                          onChange={handleWebEndDateChange}
+                          style={{
+                            border: "1px solid #ccc",
+                            borderRadius: 8,
+                            padding: 10,
+                            marginBottom: 8,
+                            width: "100%",
+                            boxSizing: "border-box"
+                          }}
+                        />
+                      ) : (
+                        <input
+                          type="datetime-local"
+                          value={formatDateTimeLocalValue(newEventEndAt)}
+                          onChange={handleWebEndDateTimeChange}
+                          style={{
+                            border: "1px solid #ccc",
+                            borderRadius: 8,
+                            padding: 10,
+                            marginBottom: 8,
+                            width: "100%",
+                            boxSizing: "border-box"
+                          }}
+                        />
+                      )
+                    ) : (
+                      <Pressable onPress={() => openDateTimePicker("end")} style={styles.input}>
+                        <Text>{formatEventInputDate(newEventEndAt, newEventIsAllDay ? "Select end date" : "Select end date/time")}</Text>
+                      </Pressable>
+                    )}
+                    {newEventEndAt ? (
+                      <Pressable onPress={() => setNewEventEndAt(null)} style={styles.buttonInline}>
+                        <Text style={styles.buttonText}>Clear End Time</Text>
+                      </Pressable>
+                    ) : null}
+
+                    <Text style={styles.filterLabel}>Visibility</Text>
+                    <View style={styles.rowWrap}>
+                      <Pressable
+                        onPress={() => setNewEventVisibility("CLUB_MEMBERS")}
+                        style={[styles.pill, newEventVisibility === "CLUB_MEMBERS" && styles.pillActive]}
+                      >
+                        <Text style={[styles.pillText, newEventVisibility === "CLUB_MEMBERS" && styles.pillTextActive]}>
+                          Club Members
+                        </Text>
+                      </Pressable>
+                      {viewingClub.isPublic ? (
+                        <Pressable
+                          onPress={() => setNewEventVisibility("PUBLIC_CLUB")}
+                          style={[styles.pill, newEventVisibility === "PUBLIC_CLUB" && styles.pillActive]}
+                        >
+                          <Text style={[styles.pillText, newEventVisibility === "PUBLIC_CLUB" && styles.pillTextActive]}>
+                            Public Club
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </ScrollView>
+
+                  <View style={styles.rowWrap}>
+                    <Pressable onPress={handleCreateEvent} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Create Event</Text>
+                    </Pressable>
+                    <Pressable onPress={() => setCreateEventModalOpen(false)} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Cancel</Text>
+                    </Pressable>
+                  </View>
+
+                  {Platform.OS === "ios" && dateTimePickerOpen ? (
+                    <DateTimePicker
+                      value={dateTimePickerDraft}
+                      mode={dateTimePickerMode}
+                      is24Hour
+                      onChange={handleDateTimePickerChange}
+                    />
+                  ) : null}
+                </View>
+              </View>
+            </Modal>
           </View>
         }
         renderItem={() => null}
@@ -621,10 +1376,22 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
 
               <Text style={styles.sectionTitle}>Matching Clubs</Text>
               {discoverCategoryFilteredClubs.slice(0, 8).map((club) => (
-                <View key={`discover-preview-${club.id}`} style={styles.card}>
-                  <Text style={styles.clubName}>{club.name}</Text>
-                  <Text style={styles.hint}>{club.description || "No description"}</Text>
-                </View>
+                <Pressable
+                  key={`discover-preview-${club.id}`}
+                  style={[styles.card, styles.interactiveCard]}
+                  onPress={() => {
+                    void openClubDetail(club);
+                  }}
+                >
+                  <View style={styles.cardOpenArea}>
+                    <View style={styles.cardTitleRow}>
+                      <Text style={styles.clubName}>{club.name}</Text>
+                      <Text style={styles.openHint}>Open ›</Text>
+                    </View>
+                    <Text style={styles.hint}>{club.description || "No description"}</Text>
+                    <Text style={styles.tapHint}>Tap card to open club</Text>
+                  </View>
+                </Pressable>
               ))}
 
               <Text style={styles.sectionTitle}>Available to Join</Text>
@@ -632,9 +1399,20 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
           }
           ListEmptyComponent={<Text style={styles.hint}>No clubs available to join for this filter.</Text>}
           renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Text style={styles.clubName}>{item.name}</Text>
-              <Text style={styles.hint}>{item.description || "User-created club"}</Text>
+            <View style={[styles.card, styles.interactiveCard]}>
+              <Pressable
+                onPress={() => {
+                  void openClubDetail(item);
+                }}
+                style={({ pressed }) => [styles.cardOpenArea, pressed && styles.interactiveCardPressed]}
+              >
+                <View style={styles.cardTitleRow}>
+                  <Text style={styles.clubName}>{item.name}</Text>
+                  <Text style={styles.openHint}>Open ›</Text>
+                </View>
+                <Text style={styles.hint}>{item.description || "User-created club"}</Text>
+                <Text style={styles.tapHint}>Tap card to open club</Text>
+              </Pressable>
               <Pressable onPress={() => handleJoinClub(item.id, item.name)} style={styles.button}>
                 <Text style={styles.buttonText}>Join Club</Text>
               </Pressable>
@@ -818,6 +1596,7 @@ export function ClubsScreen({ user, rootResetSignal = 0, focusClubId, onNavigate
           </View>
         </View>
       </Modal>
+
     </>
   );
 }
@@ -950,6 +1729,46 @@ const styles = StyleSheet.create({
   },
   categoryRowTextActive: {
     color: "#fff"
+  },
+  historyRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#ececec"
+  },
+  historyRowLast: {
+    borderBottomWidth: 0
+  },
+  historyIcon: {
+    fontSize: 14,
+    lineHeight: 20
+  },
+  historyBody: {
+    flex: 1
+  },
+  historySummary: {
+    fontSize: 14,
+    color: "#222"
+  },
+  historyTimestamp: {
+    marginTop: 3,
+    fontSize: 12,
+    color: "#777"
+  },
+  focusedTargetCard: {
+    borderColor: "#9bb8f5",
+    borderWidth: 1,
+    backgroundColor: "#f6f9ff"
+  },
+  focusedTargetItem: {
+    borderColor: "#9bb8f5",
+    borderWidth: 1,
+    backgroundColor: "#f6f9ff"
+  },
+  clubHighlightsList: {
+    maxHeight: 340
   },
   buttonText: { fontWeight: "600" }
 });

@@ -18,17 +18,25 @@ import { ProfileScreen } from "./src/screens/ProfileScreen";
 import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 
 type MainTab = "HOME" | "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS" | "PROFILE";
-type DetailNavigationTarget = "CLUBS" | "PROJECTS";
+type DetailNavigationTarget = "COMMONS" | "CLUBS" | "PROJECTS";
+type FocusItemType = "POST" | "MILESTONE" | "TASK";
 
 export default function App() {
+  const isDevBuild = typeof __DEV__ !== "undefined" && __DEV__;
   const mockUsers = getMockUsers();
   const [selectedMockUserId, setSelectedMockUserId] = useState(mockUsers[0].userId);
+  const [showDevUserControls, setShowDevUserControls] = useState(isDevBuild);
   const [activeTab, setActiveTab] = useState<MainTab>("HOME");
   const [clubsRootResetSignal, setClubsRootResetSignal] = useState(0);
+  const [projectsRootResetSignal, setProjectsRootResetSignal] = useState(0);
   const [users, setUsers] = useState<UserBasic[]>([]);
   const [profileFocusUserId, setProfileFocusUserId] = useState<string | undefined>(undefined);
   const [clubsFocusClubId, setClubsFocusClubId] = useState<string | undefined>(undefined);
+  const [clubsFocusPostId, setClubsFocusPostId] = useState<string | undefined>(undefined);
   const [projectsFocusProjectId, setProjectsFocusProjectId] = useState<string | undefined>(undefined);
+  const [projectsFocusItemId, setProjectsFocusItemId] = useState<string | undefined>(undefined);
+  const [projectsFocusItemType, setProjectsFocusItemType] = useState<Extract<FocusItemType, "MILESTONE" | "TASK"> | undefined>(undefined);
+  const [commonsFocusPostId, setCommonsFocusPostId] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSuggestions, setSearchSuggestions] = useState<GlobalSearchResult>({ users: [], clubs: [], projects: [] });
@@ -126,9 +134,12 @@ export default function App() {
       setActiveTab("PROFILE");
     } else if (type === "CLUB") {
       setClubsFocusClubId(id);
+      setClubsFocusPostId(undefined);
       setActiveTab("CLUBS");
     } else {
       setProjectsFocusProjectId(id);
+      setProjectsFocusItemId(undefined);
+      setProjectsFocusItemType(undefined);
       setActiveTab("PROJECTS");
     }
     setSearchOpen(false);
@@ -137,16 +148,34 @@ export default function App() {
   function handleOpenNotification(item: NotificationItem) {
     if (item.relatedType === "PROJECT") {
       setProjectsFocusProjectId(item.projectId ?? item.relatedId);
+      if (item.type === "PROJECT_MILESTONE_COMPLETED" || item.type === "PROJECT_TASK_COMPLETED") {
+        setProjectsFocusItemId(item.relatedId);
+        setProjectsFocusItemType(item.type === "PROJECT_MILESTONE_COMPLETED" ? "MILESTONE" : "TASK");
+      } else {
+        setProjectsFocusItemId(undefined);
+        setProjectsFocusItemType(undefined);
+      }
       setActiveTab("PROJECTS");
       return;
     }
 
     if (item.relatedType === "CLUB") {
       setClubsFocusClubId(item.clubId ?? item.relatedId);
+      setClubsFocusPostId(undefined);
       setActiveTab("CLUBS");
       return;
     }
 
+    if (item.relatedType === "POST" && item.clubId) {
+      setClubsFocusClubId(item.clubId);
+      setClubsFocusPostId(item.postId ?? item.relatedId);
+      setActiveTab("CLUBS");
+      return;
+    }
+
+    if (item.relatedType === "POST") {
+      setCommonsFocusPostId(item.postId ?? item.relatedId);
+    }
     setActiveTab("COMMONS");
   }
 
@@ -155,28 +184,73 @@ export default function App() {
   }
 
   function handleOpenDetailTarget(target: DetailNavigationTarget, id?: string) {
+    if (target === "COMMONS") {
+      setCommonsFocusPostId(id);
+      setActiveTab("COMMONS");
+      return;
+    }
+
     if (target === "PROJECTS") {
-      if (id) setProjectsFocusProjectId(id);
+      if (id) {
+        setProjectsFocusProjectId(id);
+      } else {
+        setProjectsFocusProjectId(undefined);
+      }
+      setProjectsFocusItemId(undefined);
+      setProjectsFocusItemType(undefined);
       setActiveTab("PROJECTS");
       return;
     }
 
-    if (id) setClubsFocusClubId(id);
+    if (id) {
+      setClubsFocusClubId(id);
+    } else {
+      setClubsFocusClubId(undefined);
+    }
     setActiveTab("CLUBS");
   }
 
   function handleHomeNavigate(
     target: "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS",
-    options?: { projectId?: string; clubId?: string }
+    options?: {
+      projectId?: string;
+      clubId?: string;
+      postId?: string;
+      focusItemId?: string;
+      focusItemType?: FocusItemType;
+    }
   ) {
+    if (target === "COMMONS") {
+      setCommonsFocusPostId(options?.postId);
+      setActiveTab("COMMONS");
+      return;
+    }
+
     if (target === "PROJECTS") {
-      if (options?.projectId) setProjectsFocusProjectId(options.projectId);
+      if (options?.projectId) {
+        setProjectsFocusProjectId(options.projectId);
+      } else {
+        setProjectsFocusProjectId(undefined);
+      }
+      if (options?.focusItemType === "MILESTONE" || options?.focusItemType === "TASK") {
+        setProjectsFocusItemId(options.focusItemId);
+        setProjectsFocusItemType(options.focusItemType);
+      } else {
+        setProjectsFocusItemId(undefined);
+        setProjectsFocusItemType(undefined);
+      }
       setActiveTab("PROJECTS");
       return;
     }
 
     if (target === "CLUBS") {
-      if (options?.clubId) setClubsFocusClubId(options.clubId);
+      if (options?.clubId) {
+        setClubsFocusClubId(options.clubId);
+        setClubsFocusPostId(options.postId);
+      } else {
+        setClubsFocusClubId(undefined);
+        setClubsFocusPostId(undefined);
+      }
       setActiveTab("CLUBS");
       return;
     }
@@ -187,21 +261,38 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.switcherLabel}>Local dev user:</Text>
-        <View style={styles.switcherRow}>
-          {mockUsers.map((mockUser) => {
-            const active = selectedMockUserId === mockUser.userId;
-            return (
-              <Pressable
-                key={mockUser.userId}
-                onPress={() => setSelectedMockUserId(mockUser.userId)}
-                style={[styles.switcherPill, active && styles.switcherPillActive]}
-              >
-                <Text style={[styles.switcherPillText, active && styles.switcherPillTextActive]}>{mockUser.displayName}</Text>
+        {isDevBuild && showDevUserControls ? (
+          <>
+            <View style={styles.devHeaderRow}>
+              <Text style={styles.switcherLabel}>Local dev user:</Text>
+              <Pressable onPress={() => setShowDevUserControls(false)} style={styles.devToggleButton}>
+                <Text style={styles.devToggleButtonText}>Hide Dev Controls</Text>
               </Pressable>
-            );
-          })}
-        </View>
+            </View>
+            <View style={styles.switcherRow}>
+              {mockUsers.map((mockUser) => {
+                const active = selectedMockUserId === mockUser.userId;
+                return (
+                  <Pressable
+                    key={mockUser.userId}
+                    onPress={() => setSelectedMockUserId(mockUser.userId)}
+                    style={[styles.switcherPill, active && styles.switcherPillActive]}
+                  >
+                    <Text style={[styles.switcherPillText, active && styles.switcherPillTextActive]}>{mockUser.displayName}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
+
+        {isDevBuild && !showDevUserControls ? (
+          <View style={styles.devRestoreRow}>
+            <Pressable onPress={() => setShowDevUserControls(true)} style={styles.devToggleButton}>
+              <Text style={styles.devToggleButtonText}>Show Dev Controls</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.navRow}>
@@ -225,7 +316,14 @@ export default function App() {
               key={tab}
               onPress={() => {
                 if (tab === "CLUBS" && activeTab === "CLUBS") {
+                  setClubsFocusClubId(undefined);
                   setClubsRootResetSignal((value) => value + 1);
+                }
+                if (tab === "PROJECTS" && activeTab === "PROJECTS") {
+                  setProjectsFocusProjectId(undefined);
+                  setProjectsFocusItemId(undefined);
+                  setProjectsFocusItemType(undefined);
+                  setProjectsRootResetSignal((value) => value + 1);
                 }
                 setActiveTab(tab);
               }}
@@ -365,8 +463,27 @@ export default function App() {
       {activeTab === "COMMONS" ? (
         <FeedScreen
           user={user}
-          onNavigate={(target, id) => {
-            handleOpenDetailTarget(target, id);
+          focusPostId={commonsFocusPostId}
+          onFocusPostConsumed={(postId) => {
+            setCommonsFocusPostId((current) => (current === postId ? undefined : current));
+          }}
+          onNavigate={(target, options) => {
+            if (target === "PROJECTS") {
+              setProjectsFocusProjectId(options?.projectId);
+              if (options?.focusItemType === "MILESTONE" || options?.focusItemType === "TASK") {
+                setProjectsFocusItemId(options.focusItemId);
+                setProjectsFocusItemType(options.focusItemType);
+              } else {
+                setProjectsFocusItemId(undefined);
+                setProjectsFocusItemType(undefined);
+              }
+              setActiveTab("PROJECTS");
+              return;
+            }
+
+            setClubsFocusClubId(options?.clubId);
+            setClubsFocusPostId(options?.postId);
+            setActiveTab("CLUBS");
           }}
         />
       ) : null}
@@ -386,8 +503,21 @@ export default function App() {
           user={user}
           rootResetSignal={clubsRootResetSignal}
           focusClubId={clubsFocusClubId}
+          focusClubPostId={clubsFocusPostId}
+          onFocusClubConsumed={(clubId) => {
+            setClubsFocusClubId((current) => (current === clubId ? undefined : current));
+          }}
+          onFocusClubPostConsumed={(postId) => {
+            setClubsFocusPostId((current) => (current === postId ? undefined : current));
+          }}
+          onBackToClubsRoot={() => {
+            setClubsFocusClubId(undefined);
+            setClubsFocusPostId(undefined);
+          }}
           onNavigateToProject={(projectId) => {
             setProjectsFocusProjectId(projectId);
+            setProjectsFocusItemId(undefined);
+            setProjectsFocusItemType(undefined);
             setActiveTab("PROJECTS");
           }}
         />
@@ -396,6 +526,21 @@ export default function App() {
         <ProjectsScreen
           user={user}
           focusProjectId={projectsFocusProjectId}
+          focusItemId={projectsFocusItemId}
+          focusItemType={projectsFocusItemType}
+          rootResetSignal={projectsRootResetSignal}
+          onFocusProjectConsumed={(projectId) => {
+            setProjectsFocusProjectId((current) => (current === projectId ? undefined : current));
+          }}
+          onFocusItemConsumed={(itemId, itemType) => {
+            setProjectsFocusItemId((current) => (current === itemId ? undefined : current));
+            setProjectsFocusItemType((current) => (current === itemType ? undefined : current));
+          }}
+          onBackToProjectsRoot={() => {
+            setProjectsFocusProjectId(undefined);
+            setProjectsFocusItemId(undefined);
+            setProjectsFocusItemType(undefined);
+          }}
           onNavigateToClub={(clubId) => {
             setClubsFocusClubId(clubId);
             setActiveTab("CLUBS");
@@ -430,9 +575,30 @@ const styles = StyleSheet.create({
   },
   switcherLabel: {
     marginTop: 4,
-    marginBottom: 6,
     color: "#444",
     fontSize: 12
+  },
+  devHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+    gap: 8
+  },
+  devRestoreRow: {
+    alignItems: "flex-end"
+  },
+  devToggleButton: {
+    borderWidth: 1,
+    borderColor: "#bbb",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4
+  },
+  devToggleButtonText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#444"
   },
   switcherRow: {
     flexDirection: "row",

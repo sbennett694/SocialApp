@@ -5,6 +5,9 @@ import { FeedCursor, FeedEvent } from "../../domain/feedEvent";
 import { allowedCategories, controlledPostTags } from "../../domain/seedData";
 import {
   Club,
+  ClubEvent,
+  ClubEventStatus,
+  ClubEventVisibility,
   ClubMember,
   Comment,
   CloseCircleInvite,
@@ -15,6 +18,7 @@ import {
   Reaction,
   Report,
   ReportReason,
+  TaskTimeEntry,
   ThreadType,
   Visibility
 } from "../../domain/types";
@@ -34,10 +38,12 @@ import {
   assertClubHasExactlyOneOwner,
   assertFounderImmutable,
   canManageClub,
+  getClubMembershipRole,
   canManageProject,
   getProjectMilestonesOrdered,
   publishActivityPost,
   relationKey
+  ,transferClubOwnershipAtomic
 } from "../../services/socialService";
 import { feedEventService } from "../../services/feedEventService";
 import { feedQueryService } from "../../services/feedQueryService";
@@ -56,11 +62,13 @@ function buildSeedSummary() {
     follows: store.follows.length,
     closeCircleInvites: store.closeCircleInvites.length,
     clubs: store.clubs.length,
+    clubEvents: store.clubEvents.length,
     clubMembers: store.clubMembers.length,
     projects: store.projects.length,
     projectClubLinks: store.projectClubLinks.length,
     milestones: store.projectMilestones.length,
     highlights: store.projectHighlights.length,
+    taskTimeEntries: store.taskTimeEntries.length,
     posts: store.posts.length,
     comments: store.comments.length,
     reactions: store.reactions.length,
@@ -75,9 +83,11 @@ const {
   closeCircleInvites,
   clubMembers,
   clubs,
+  clubEvents,
   projects,
   projectClubLinks,
   projectMilestones,
+  taskTimeEntries,
   projectHighlights,
   reactions,
   comments,
@@ -112,6 +122,76 @@ function decodeFeedCursor(rawCursor: string | undefined): FeedCursor | undefined
 function encodeFeedCursor(cursor: FeedCursor | undefined): string | undefined {
   if (!cursor) return undefined;
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64");
+}
+
+const allowedClubEventVisibility: ClubEventVisibility[] = ["CLUB_MEMBERS", "PUBLIC_CLUB"];
+const allowedClubEventStatuses: ClubEventStatus[] = ["SCHEDULED", "CANCELLED"];
+
+function parseIsoDate(rawValue: unknown): string | null {
+  if (typeof rawValue !== "string" || !rawValue.trim()) return null;
+  const parsed = new Date(rawValue);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function parseOptionalIsoDateField(
+  rawValue: unknown,
+  fieldName: "startAt" | "dueAt"
+): { provided: boolean; value: string | undefined; error?: string } {
+  if (rawValue === undefined) {
+    return { provided: false, value: undefined };
+  }
+
+  if (rawValue === null) {
+    return { provided: true, value: undefined };
+  }
+
+  if (typeof rawValue === "string") {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return { provided: true, value: undefined };
+    }
+    const parsed = parseIsoDate(trimmed);
+    if (!parsed) {
+      return { provided: true, value: undefined, error: `${fieldName} must be a valid ISO date string when provided.` };
+    }
+    return { provided: true, value: parsed };
+  }
+
+  return { provided: true, value: undefined, error: `${fieldName} must be a valid ISO date string when provided.` };
+}
+
+function validateStartDueOrder(startAt: string | undefined, dueAt: string | undefined): string | null {
+  if (!startAt || !dueAt) return null;
+  if (new Date(startAt).getTime() > new Date(dueAt).getTime()) {
+    return "startAt must be before or equal to dueAt.";
+  }
+  return null;
+}
+
+function getProjectMilestoneTaskContext(projectId: string, milestoneId: string, taskId: string): {
+  project: Project;
+  milestone: ProjectMilestone;
+  task: ProjectMilestoneTask;
+} | null {
+  const project = projects.find((entry) => entry.id === projectId);
+  if (!project) return null;
+
+  const milestone = projectMilestones.find((item) => item.id === milestoneId && item.projectId === projectId);
+  if (!milestone) return null;
+
+  const task = milestone.tasks.find((item) => item.id === taskId);
+  if (!task) return null;
+
+  return { project, milestone, task };
+}
+
+function getTaskTimeEntries(taskId: string): TaskTimeEntry[] {
+  return taskTimeEntries.filter((entry) => entry.taskId === taskId && !entry.isDeleted);
+}
+
+function getTaskTotalMinutes(taskId: string): number {
+  return getTaskTimeEntries(taskId).reduce((sum, entry) => sum + entry.durationMinutes, 0);
 }
 
 function toLegacyPostFromFeedEvent(event: FeedEvent): Post | null {
@@ -653,11 +733,14 @@ router.get("/notifications", (req, res) => {
     type:
       | "POST_COMMENTED"
       | "POST_REACTED"
+      | "CLUB_OWNERSHIP_TRANSFERRED_TO_YOU"
+      | "CLUB_MODERATOR_PROMOTED"
+      | "CLUB_MODERATOR_DEMOTED"
+      | "CLUB_MEMBER_REMOVED"
       | "PROJECT_MILESTONE_COMPLETED"
       | "PROJECT_TASK_COMPLETED"
       | "PROJECT_CLUB_REQUEST_APPROVED"
-      | "PROJECT_CLUB_REQUEST_REJECTED"
-      | "CLUB_MEMBERSHIP_UPDATED";
+      | "PROJECT_CLUB_REQUEST_REJECTED";
     actorId: string;
     message: string;
     relatedType: "POST" | "PROJECT" | "CLUB";
@@ -749,21 +832,67 @@ router.get("/notifications", (req, res) => {
       });
     });
 
-  clubMembers
-    .filter((member) => member.userId === viewerId)
-    .forEach((member) => {
-      const club = clubs.find((entry) => entry.id === member.clubId);
-      if (!club) return;
-      notificationItems.push({
-        id: `club-membership:${member.clubId}:${member.userId}:${member.role}:${member.createdAt}`,
-        type: "CLUB_MEMBERSHIP_UPDATED",
-        actorId: club.ownerId,
-        message: `Your role in ${club.name} is ${member.role}`,
-        relatedType: "CLUB",
-        relatedId: member.clubId,
-        clubId: member.clubId,
-        createdAt: member.createdAt
-      });
+  store.clubHistoryEvents
+    .filter((event) => event.subjectUserId === viewerId)
+    .forEach((event) => {
+      const club = clubs.find((entry) => entry.id === event.clubId);
+      const clubName = club?.name ?? "club";
+      const actorId = event.actorId ?? "club-admin";
+
+      if (event.eventType === "OWNERSHIP_TRANSFERRED") {
+        notificationItems.push({
+          id: `club-history:${event.id}`,
+          type: "CLUB_OWNERSHIP_TRANSFERRED_TO_YOU",
+          actorId,
+          message: `Ownership of ${clubName} was transferred to you`,
+          relatedType: "CLUB",
+          relatedId: event.clubId,
+          clubId: event.clubId,
+          createdAt: event.createdAt
+        });
+        return;
+      }
+
+      if (event.eventType === "MODERATOR_ADDED") {
+        notificationItems.push({
+          id: `club-history:${event.id}`,
+          type: "CLUB_MODERATOR_PROMOTED",
+          actorId,
+          message: `You were promoted to moderator in ${clubName}`,
+          relatedType: "CLUB",
+          relatedId: event.clubId,
+          clubId: event.clubId,
+          createdAt: event.createdAt
+        });
+        return;
+      }
+
+      if (event.eventType === "MODERATOR_REMOVED") {
+        notificationItems.push({
+          id: `club-history:${event.id}`,
+          type: "CLUB_MODERATOR_DEMOTED",
+          actorId,
+          message: `You were demoted from moderator in ${clubName}`,
+          relatedType: "CLUB",
+          relatedId: event.clubId,
+          clubId: event.clubId,
+          createdAt: event.createdAt
+        });
+        return;
+      }
+
+      if (event.eventType === "MEMBER_REMOVED") {
+        notificationItems.push({
+          id: `club-history:${event.id}`,
+          type: "CLUB_MEMBER_REMOVED",
+          actorId,
+          message: `You were removed from ${clubName}`,
+          relatedType: "CLUB",
+          relatedId: event.clubId,
+          clubId: event.clubId,
+          createdAt: event.createdAt
+        });
+      }
     });
 
   const sorted = notificationItems
@@ -1009,7 +1138,52 @@ router.patch("/clubs/:clubId/members/:memberId/role", (req, res) => {
     return res.status(400).json({ message: "Cannot change owner role." });
   }
 
+  const previousRole = membership.role;
+  if (previousRole === role) {
+    return res.json(membership);
+  }
+
   membership.role = role;
+
+  clubHistoryRepository.append({
+    clubId: club.id,
+    eventType: "MEMBER_ROLE_CHANGED",
+    actorId,
+    subjectUserId: memberId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      previousRole,
+      newRole: role
+    }
+  });
+
+  if (previousRole === "MEMBER" && role === "MODERATOR") {
+    clubHistoryRepository.append({
+      clubId: club.id,
+      eventType: "MODERATOR_ADDED",
+      actorId,
+      subjectUserId: memberId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        previousRole,
+        newRole: role
+      }
+    });
+  }
+
+  if (previousRole === "MODERATOR" && role === "MEMBER") {
+    clubHistoryRepository.append({
+      clubId: club.id,
+      eventType: "MODERATOR_REMOVED",
+      actorId,
+      subjectUserId: memberId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        previousRole,
+        newRole: role
+      }
+    });
+  }
 
   try {
     assertFounderImmutable(club, req.body?.founderId !== undefined ? String(req.body.founderId) : undefined);
@@ -1019,6 +1193,295 @@ router.patch("/clubs/:clubId/members/:memberId/role", (req, res) => {
   }
 
   return res.json(membership);
+});
+
+router.patch("/clubs/:clubId/ownership", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const actorId = String(req.body?.actorId ?? "");
+  const newOwnerId = String(req.body?.newOwnerId ?? "");
+  const previousOwnerFallbackRole = String(req.body?.previousOwnerFallbackRole ?? "MODERATOR").toUpperCase() as
+    | "MEMBER"
+    | "MODERATOR";
+
+  if (!actorId || !newOwnerId) {
+    return res.status(400).json({ message: "actorId and newOwnerId are required." });
+  }
+
+  if (!["MEMBER", "MODERATOR"].includes(previousOwnerFallbackRole)) {
+    return res.status(400).json({ message: "previousOwnerFallbackRole must be MEMBER or MODERATOR." });
+  }
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  const previousOwnerId = club.ownerId;
+  const previousNewOwnerRole = getClubMembershipRole(clubId, newOwnerId);
+
+  try {
+    assertFounderImmutable(club, req.body?.founderId !== undefined ? String(req.body.founderId) : undefined);
+    if (getClubMembershipRole(clubId, actorId) !== "OWNER") {
+      return res.status(403).json({ message: "Only the current club owner can transfer ownership." });
+    }
+
+    const newOwnerMembership = clubMembers.find((member) => member.clubId === clubId && member.userId === newOwnerId);
+    if (!newOwnerMembership) {
+      return res.status(400).json({ message: "New owner must already be a club member." });
+    }
+
+    const previousOwnerMembership = clubMembers.find(
+      (member) => member.clubId === clubId && member.userId === previousOwnerId
+    );
+    if (!previousOwnerMembership) {
+      return res.status(500).json({ message: "Current owner membership not found." });
+    }
+
+    transferClubOwnershipAtomic({
+      clubId,
+      actorId,
+      newOwnerId,
+      previousOwnerFallbackRole
+    });
+
+    clubHistoryRepository.append({
+      clubId,
+      eventType: "OWNERSHIP_TRANSFERRED",
+      actorId,
+      subjectUserId: newOwnerId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        previousOwnerId,
+        newOwnerId,
+        previousOwnerFallbackRole
+      }
+    });
+
+    if (previousOwnerFallbackRole === "MODERATOR") {
+      clubHistoryRepository.append({
+        clubId,
+        eventType: "MODERATOR_ADDED",
+        actorId,
+        subjectUserId: previousOwnerId,
+        visibility: "CLUB_MEMBERS",
+        metadata: {
+          previousRole: "OWNER",
+          newRole: "MODERATOR"
+        }
+      });
+    }
+
+    clubHistoryRepository.append({
+      clubId,
+      eventType: "MEMBER_ROLE_CHANGED",
+      actorId,
+      subjectUserId: previousOwnerId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        previousRole: "OWNER",
+        newRole: previousOwnerFallbackRole
+      }
+    });
+
+    clubHistoryRepository.append({
+      clubId,
+      eventType: "MEMBER_ROLE_CHANGED",
+      actorId,
+      subjectUserId: newOwnerId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        previousRole: previousNewOwnerRole,
+        newRole: "OWNER"
+      }
+    });
+
+    assertClubHasExactlyOneOwner(clubId);
+    assertFounderImmutable(club, club.founderId);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : "Ownership transfer failed." });
+  }
+
+  return res.json(club);
+});
+
+router.delete("/clubs/:clubId/members/:memberId", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const memberId = String(req.params.memberId);
+  const actorId = String(req.body?.actorId ?? "");
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  const actorRole = getClubMembershipRole(clubId, actorId);
+  if (actorRole !== "OWNER" && actorRole !== "MODERATOR") {
+    return res.status(403).json({ message: "Only club owner/moderator can remove members." });
+  }
+
+  const membership = clubMembers.find((member) => member.clubId === clubId && member.userId === memberId);
+  if (!membership) {
+    return res.status(404).json({ message: "Club member not found." });
+  }
+
+  if (membership.role === "OWNER") {
+    return res.status(400).json({ message: "Cannot remove the current owner. Transfer ownership first." });
+  }
+
+  if (actorRole === "MODERATOR" && membership.role === "MODERATOR") {
+    return res.status(403).json({ message: "Moderators cannot remove other moderators." });
+  }
+
+  const index = clubMembers.findIndex((member) => member.clubId === clubId && member.userId === memberId);
+  if (index >= 0) {
+    clubMembers.splice(index, 1);
+  }
+
+  clubHistoryRepository.append({
+    clubId,
+    eventType: "MEMBER_REMOVED",
+    actorId,
+    subjectUserId: memberId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      removedRole: membership.role
+    }
+  });
+
+  assertClubHasExactlyOneOwner(clubId);
+
+  return res.json({ ok: true });
+});
+
+router.get("/clubs/:clubId/events", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const viewerId = req.query.viewerId ? String(req.query.viewerId) : "";
+  const timing = req.query.timing ? String(req.query.timing).toLowerCase() : "all";
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  const isMember = !!viewerId && !!getClubMembershipRole(clubId, viewerId);
+  if (!club.isPublic && !isMember) {
+    return res.status(403).json({ message: "Only club members can view events for private clubs." });
+  }
+
+  const now = Date.now();
+  const visibleEvents = clubEvents.filter((event) => {
+    if (event.clubId !== clubId) return false;
+    if (!isMember && event.visibility !== "PUBLIC_CLUB") return false;
+    const startAtMs = new Date(event.startAt).getTime();
+    if (timing === "upcoming") return startAtMs >= now;
+    if (timing === "past") return startAtMs < now;
+    return true;
+  });
+
+  visibleEvents.sort((a, b) => a.startAt.localeCompare(b.startAt) || a.id.localeCompare(b.id));
+  return res.json(visibleEvents);
+});
+
+router.post("/clubs/:clubId/events", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const actorId = String(req.body?.actorId ?? "");
+  const title = String(req.body?.title ?? "").trim();
+  const description = req.body?.description !== undefined ? String(req.body.description).trim() : undefined;
+  const startAt = parseIsoDate(req.body?.startAt);
+  const endAt = req.body?.endAt !== undefined ? parseIsoDate(req.body.endAt) : undefined;
+  const isAllDay = req.body?.isAllDay === true;
+  const status = String(req.body?.status ?? "SCHEDULED").toUpperCase() as ClubEventStatus;
+  const visibility = String(req.body?.visibility ?? "CLUB_MEMBERS").toUpperCase() as ClubEventVisibility;
+  const locationText = req.body?.locationText !== undefined ? String(req.body.locationText).trim() : undefined;
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  if (!actorId || !canManageClub(clubId, actorId)) {
+    return res.status(403).json({ message: "Only club owner/admin can create club events." });
+  }
+
+  if (!title) {
+    return res.status(400).json({ message: "Event title is required." });
+  }
+
+  if (!startAt) {
+    return res.status(400).json({ message: "startAt must be a valid ISO date string." });
+  }
+
+  if (endAt === null) {
+    return res.status(400).json({ message: "endAt must be a valid ISO date string when provided." });
+  }
+
+  if (endAt && endAt < startAt) {
+    return res.status(400).json({ message: "endAt must be after startAt." });
+  }
+
+  if (!allowedClubEventStatuses.includes(status)) {
+    return res.status(400).json({ message: "Invalid status." });
+  }
+
+  if (!allowedClubEventVisibility.includes(visibility)) {
+    return res.status(400).json({ message: "Invalid visibility." });
+  }
+
+  if (visibility === "PUBLIC_CLUB" && !club.isPublic) {
+    return res.status(400).json({ message: "Private clubs cannot create PUBLIC_CLUB events." });
+  }
+
+  const nowIso = new Date().toISOString();
+  const event: ClubEvent = {
+    id: uuidv4(),
+    clubId,
+    title,
+    description: description || undefined,
+    isAllDay,
+    startAt,
+    endAt: endAt || undefined,
+    locationText: locationText || undefined,
+    visibility,
+    status,
+    createdBy: actorId,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+
+  clubEvents.push(event);
+
+  clubHistoryRepository.append({
+    clubId,
+    eventType: "CLUB_EVENT_CREATED",
+    actorId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      eventId: event.id,
+      title: event.title,
+      status: event.status,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      visibility: event.visibility,
+      locationText: event.locationText
+    },
+    createdAt: event.createdAt
+  });
+
+  return res.status(201).json(event);
+});
+
+router.get("/clubs/:clubId/history", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const limitRaw = req.query.limit ? Number(req.query.limit) : 50;
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  const history = clubHistoryRepository.listByClub(clubId).slice(0, limit);
+  return res.json(history);
 });
 
 router.get("/clubs/:clubId/members", (req, res) => {
@@ -1074,6 +1537,24 @@ router.post("/projects", (req, res) => {
   };
 
   projects.push(project);
+
+  const isClubOwnedProject = !!clubId && ownerId === clubId;
+
+  if (isClubOwnedProject) {
+    clubHistoryRepository.append({
+      clubId,
+      eventType: "PROJECT_CREATED_FOR_CLUB",
+      actorId: createdBy,
+      subjectProjectId: project.id,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        projectTitle: project.title,
+        ownerId: project.ownerId,
+        createdBy: project.createdBy
+      },
+      createdAt: project.createdAt
+    });
+  }
 
   if (clubId) {
     projectClubLinks.push({
@@ -1142,6 +1623,14 @@ router.post("/projects/:projectId/clubs", (req, res) => {
     return res.status(404).json({ message: "Club not found." });
   }
 
+  const actorMembershipRole = getClubMembershipRole(clubId, actorId);
+  if (!actorMembershipRole) {
+    return res.status(400).json({
+      error: "You must be a member of this club to request linking a project.",
+      message: "You must be a member of this club to request linking a project."
+    });
+  }
+
   const existing = projectClubLinks.find((link) => link.projectId === projectId && link.clubId === clubId);
   if (existing && existing.status !== "REJECTED") {
     return res.status(409).json({ message: "Project already linked/requested for this club." });
@@ -1160,10 +1649,62 @@ router.post("/projects/:projectId/clubs", (req, res) => {
     existing.status = status;
     existing.requestedBy = actorId;
     existing.createdAt = link.createdAt;
+
+    clubHistoryRepository.append({
+      clubId,
+      eventType: "PROJECT_LINK_REQUESTED",
+      actorId,
+      subjectProjectId: projectId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        status: existing.status,
+        requestedBy: actorId
+      }
+    });
+
+    if (status === "APPROVED") {
+      clubHistoryRepository.append({
+        clubId,
+        eventType: "PROJECT_LINK_APPROVED",
+        actorId,
+        subjectProjectId: projectId,
+        visibility: "CLUB_MEMBERS",
+        metadata: {
+          requestedBy: actorId
+        }
+      });
+    }
+
     return res.status(201).json(existing);
   }
 
   projectClubLinks.push(link);
+
+  clubHistoryRepository.append({
+    clubId,
+    eventType: "PROJECT_LINK_REQUESTED",
+    actorId,
+    subjectProjectId: projectId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      status,
+      requestedBy: actorId
+    }
+  });
+
+  if (status === "APPROVED") {
+    clubHistoryRepository.append({
+      clubId,
+      eventType: "PROJECT_LINK_APPROVED",
+      actorId,
+      subjectProjectId: projectId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        requestedBy: actorId
+      }
+    });
+  }
+
   return res.status(201).json(link);
 });
 
@@ -1186,8 +1727,56 @@ router.patch("/projects/:projectId/clubs/:clubId", (req, res) => {
     return res.status(404).json({ message: "Project-club link not found." });
   }
 
+  const previousStatus = link.status;
   link.status = status;
+
+  if (previousStatus !== status) {
+    clubHistoryRepository.append({
+      clubId,
+      eventType: status === "APPROVED" ? "PROJECT_LINK_APPROVED" : "PROJECT_LINK_REJECTED",
+      actorId,
+      subjectProjectId: projectId,
+      visibility: "CLUB_MEMBERS",
+      metadata: {
+        previousStatus,
+        status,
+        requestedBy: link.requestedBy
+      }
+    });
+  }
+
   return res.json(link);
+});
+
+router.delete("/projects/:projectId/clubs/:clubId", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const clubId = String(req.params.clubId);
+  const actorId = String(req.body?.actorId ?? "");
+
+  if (!canManageClub(clubId, actorId)) {
+    return res.status(403).json({ message: "Only club owner/admin can remove project links." });
+  }
+
+  const index = projectClubLinks.findIndex((entry) => entry.projectId === projectId && entry.clubId === clubId);
+  if (index < 0) {
+    return res.status(404).json({ message: "Project-club link not found." });
+  }
+
+  const [removed] = projectClubLinks.splice(index, 1);
+
+  clubHistoryRepository.append({
+    clubId,
+    eventType: "PROJECT_LINK_REMOVED",
+    actorId,
+    subjectProjectId: projectId,
+    visibility: "CLUB_MEMBERS",
+    metadata: {
+      previousStatus: removed.status,
+      requestedBy: removed.requestedBy
+    }
+  });
+
+  return res.json({ ok: true });
 });
 
 router.get("/projects", (req, res) => {
@@ -1409,6 +1998,8 @@ router.post("/projects/:projectId/milestones", (req, res) => {
   const projectId = String(req.params.projectId);
   const actorId = String(req.body?.actorId ?? "");
   const title = String(req.body?.title ?? "").trim();
+  const parsedStartAt = parseOptionalIsoDateField(req.body?.startAt, "startAt");
+  const parsedDueAt = parseOptionalIsoDateField(req.body?.dueAt, "dueAt");
 
   const project = projects.find((entry) => entry.id === projectId);
   if (!project) {
@@ -1423,11 +2014,26 @@ router.post("/projects/:projectId/milestones", (req, res) => {
     return res.status(400).json({ message: "Milestone title is required." });
   }
 
+  if (parsedStartAt.error) {
+    return res.status(400).json({ message: parsedStartAt.error });
+  }
+
+  if (parsedDueAt.error) {
+    return res.status(400).json({ message: parsedDueAt.error });
+  }
+
+  const scheduleError = validateStartDueOrder(parsedStartAt.value, parsedDueAt.value);
+  if (scheduleError) {
+    return res.status(400).json({ message: scheduleError });
+  }
+
   const milestone: ProjectMilestone = {
     id: uuidv4(),
     projectId,
     title,
     status: "OPEN",
+    startAt: parsedStartAt.value,
+    dueAt: parsedDueAt.value,
     order: getProjectMilestonesOrdered(projectId).length + 1,
     tasks: [],
     createdBy: actorId,
@@ -1453,6 +2059,8 @@ router.patch("/projects/:projectId/milestones/:milestoneId", (req, res) => {
   const actorId = String(req.body?.actorId ?? "");
   const status = req.body?.status ? String(req.body.status).toUpperCase() : undefined;
   const title = req.body?.title !== undefined ? String(req.body.title).trim() : undefined;
+  const parsedStartAt = parseOptionalIsoDateField(req.body?.startAt, "startAt");
+  const parsedDueAt = parseOptionalIsoDateField(req.body?.dueAt, "dueAt");
 
   const project = projects.find((entry) => entry.id === projectId);
   if (!project) {
@@ -1466,6 +2074,21 @@ router.patch("/projects/:projectId/milestones/:milestoneId", (req, res) => {
   const milestone = projectMilestones.find((item) => item.id === milestoneId && item.projectId === projectId);
   if (!milestone) {
     return res.status(404).json({ message: "Milestone not found." });
+  }
+
+  if (parsedStartAt.error) {
+    return res.status(400).json({ message: parsedStartAt.error });
+  }
+
+  if (parsedDueAt.error) {
+    return res.status(400).json({ message: parsedDueAt.error });
+  }
+
+  const nextStartAt = parsedStartAt.provided ? parsedStartAt.value : milestone.startAt;
+  const nextDueAt = parsedDueAt.provided ? parsedDueAt.value : milestone.dueAt;
+  const scheduleError = validateStartDueOrder(nextStartAt, nextDueAt);
+  if (scheduleError) {
+    return res.status(400).json({ message: scheduleError });
   }
 
   if (status) {
@@ -1512,6 +2135,14 @@ router.patch("/projects/:projectId/milestones/:milestoneId", (req, res) => {
     milestone.title = title;
   }
 
+  if (parsedStartAt.provided) {
+    milestone.startAt = parsedStartAt.value;
+  }
+
+  if (parsedDueAt.provided) {
+    milestone.dueAt = parsedDueAt.value;
+  }
+
   return res.json(milestone);
 });
 
@@ -1520,6 +2151,8 @@ router.post("/projects/:projectId/milestones/:milestoneId/tasks", (req, res) => 
   const milestoneId = String(req.params.milestoneId);
   const actorId = String(req.body?.actorId ?? "");
   const text = String(req.body?.text ?? "").trim();
+  const parsedStartAt = parseOptionalIsoDateField(req.body?.startAt, "startAt");
+  const parsedDueAt = parseOptionalIsoDateField(req.body?.dueAt, "dueAt");
 
   const project = projects.find((entry) => entry.id === projectId);
   if (!project) {
@@ -1534,6 +2167,19 @@ router.post("/projects/:projectId/milestones/:milestoneId/tasks", (req, res) => 
     return res.status(400).json({ message: "Task text is required." });
   }
 
+  if (parsedStartAt.error) {
+    return res.status(400).json({ message: parsedStartAt.error });
+  }
+
+  if (parsedDueAt.error) {
+    return res.status(400).json({ message: parsedDueAt.error });
+  }
+
+  const scheduleError = validateStartDueOrder(parsedStartAt.value, parsedDueAt.value);
+  if (scheduleError) {
+    return res.status(400).json({ message: scheduleError });
+  }
+
   const milestone = projectMilestones.find((item) => item.id === milestoneId && item.projectId === projectId);
   if (!milestone) {
     return res.status(404).json({ message: "Milestone not found." });
@@ -1543,6 +2189,8 @@ router.post("/projects/:projectId/milestones/:milestoneId/tasks", (req, res) => 
     id: uuidv4(),
     text,
     isDone: false,
+    startAt: parsedStartAt.value,
+    dueAt: parsedDueAt.value,
     createdBy: actorId,
     createdAt: new Date().toISOString()
   };
@@ -1566,6 +2214,10 @@ router.patch("/projects/:projectId/milestones/:milestoneId/tasks/:taskId", (req,
   const taskId = String(req.params.taskId);
   const actorId = String(req.body?.actorId ?? "");
   const isDone = req.body?.isDone;
+  const hasIsDone = typeof isDone === "boolean";
+  const text = req.body?.text !== undefined ? String(req.body.text).trim() : undefined;
+  const parsedStartAt = parseOptionalIsoDateField(req.body?.startAt, "startAt");
+  const parsedDueAt = parseOptionalIsoDateField(req.body?.dueAt, "dueAt");
 
   const project = projects.find((entry) => entry.id === projectId);
   if (!project) {
@@ -1576,8 +2228,24 @@ router.patch("/projects/:projectId/milestones/:milestoneId/tasks/:taskId", (req,
     return res.status(403).json({ message: "Only project owner/admin can manage milestone tasks." });
   }
 
-  if (typeof isDone !== "boolean") {
-    return res.status(400).json({ message: "isDone must be boolean." });
+  if (isDone !== undefined && typeof isDone !== "boolean") {
+    return res.status(400).json({ message: "isDone must be boolean when provided." });
+  }
+
+  if (parsedStartAt.error) {
+    return res.status(400).json({ message: parsedStartAt.error });
+  }
+
+  if (parsedDueAt.error) {
+    return res.status(400).json({ message: parsedDueAt.error });
+  }
+
+  if (text !== undefined && !text) {
+    return res.status(400).json({ message: "Task text must not be empty when provided." });
+  }
+
+  if (!hasIsDone && text === undefined && !parsedStartAt.provided && !parsedDueAt.provided) {
+    return res.status(400).json({ message: "Provide at least one field to update." });
   }
 
   const milestone = projectMilestones.find((item) => item.id === milestoneId && item.projectId === projectId);
@@ -1588,6 +2256,29 @@ router.patch("/projects/:projectId/milestones/:milestoneId/tasks/:taskId", (req,
   const task = milestone.tasks.find((item) => item.id === taskId);
   if (!task) {
     return res.status(404).json({ message: "Task not found." });
+  }
+
+  const nextStartAt = parsedStartAt.provided ? parsedStartAt.value : task.startAt;
+  const nextDueAt = parsedDueAt.provided ? parsedDueAt.value : task.dueAt;
+  const scheduleError = validateStartDueOrder(nextStartAt, nextDueAt);
+  if (scheduleError) {
+    return res.status(400).json({ message: scheduleError });
+  }
+
+  if (text !== undefined) {
+    task.text = text;
+  }
+
+  if (parsedStartAt.provided) {
+    task.startAt = parsedStartAt.value;
+  }
+
+  if (parsedDueAt.provided) {
+    task.dueAt = parsedDueAt.value;
+  }
+
+  if (!hasIsDone) {
+    return res.json(task);
   }
 
   const wasDone = task.isDone;
@@ -1606,6 +2297,142 @@ router.patch("/projects/:projectId/milestones/:milestoneId/tasks/:taskId", (req,
   }
 
   return res.json(task);
+});
+
+router.get("/projects/:projectId/milestones/:milestoneId/tasks/:taskId/time-entries", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const milestoneId = String(req.params.milestoneId);
+  const taskId = String(req.params.taskId);
+  const viewerId = String(req.query.viewerId ?? "");
+
+  const context = getProjectMilestoneTaskContext(projectId, milestoneId, taskId);
+  if (!context) {
+    return res.status(404).json({ message: "Project, milestone, or task not found." });
+  }
+
+  if (!viewerId || !isViewerProjectScoped(viewerId, projectId)) {
+    return res.status(403).json({ message: "Only project participants can view task time entries." });
+  }
+
+  const entries = getTaskTimeEntries(taskId).sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+  );
+
+  return res.json({
+    taskId,
+    entries,
+    taskTotalMinutes: getTaskTotalMinutes(taskId)
+  });
+});
+
+router.post("/projects/:projectId/milestones/:milestoneId/tasks/:taskId/time-entries", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const milestoneId = String(req.params.milestoneId);
+  const taskId = String(req.params.taskId);
+  const actorId = String(req.body?.actorId ?? "");
+  const durationMinutesRaw = Number(req.body?.durationMinutes);
+  const note = req.body?.note !== undefined ? String(req.body.note).trim() : undefined;
+
+  const context = getProjectMilestoneTaskContext(projectId, milestoneId, taskId);
+  if (!context) {
+    return res.status(404).json({ message: "Project, milestone, or task not found." });
+  }
+
+  if (!actorId || !isViewerProjectScoped(actorId, projectId)) {
+    return res.status(403).json({ message: "Only project participants can create task time entries." });
+  }
+
+  if (!Number.isInteger(durationMinutesRaw) || durationMinutesRaw <= 0) {
+    return res.status(400).json({ message: "durationMinutes must be a positive integer." });
+  }
+
+  const nowIso = new Date().toISOString();
+  const entry: TaskTimeEntry = {
+    id: uuidv4(),
+    taskId,
+    userId: actorId,
+    entryType: "MANUAL",
+    durationMinutes: durationMinutesRaw,
+    note: note || undefined,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    isDeleted: false
+  };
+
+  taskTimeEntries.push(entry);
+  return res.status(201).json(entry);
+});
+
+router.patch("/projects/:projectId/milestones/:milestoneId/tasks/:taskId/time-entries/:entryId", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const milestoneId = String(req.params.milestoneId);
+  const taskId = String(req.params.taskId);
+  const entryId = String(req.params.entryId);
+  const actorId = String(req.body?.actorId ?? "");
+  const note = req.body?.note !== undefined ? String(req.body.note).trim() : undefined;
+  const hasDuration = req.body?.durationMinutes !== undefined;
+  const durationMinutesRaw = Number(req.body?.durationMinutes);
+
+  const context = getProjectMilestoneTaskContext(projectId, milestoneId, taskId);
+  if (!context) {
+    return res.status(404).json({ message: "Project, milestone, or task not found." });
+  }
+
+  const entry = taskTimeEntries.find((item) => item.id === entryId && item.taskId === taskId && !item.isDeleted);
+  if (!entry) {
+    return res.status(404).json({ message: "Task time entry not found." });
+  }
+
+  if (!actorId || entry.userId !== actorId) {
+    return res.status(403).json({ message: "Only the entry owner can edit this task time entry." });
+  }
+
+  if (!hasDuration && note === undefined) {
+    return res.status(400).json({ message: "Provide at least one field to update." });
+  }
+
+  if (hasDuration) {
+    if (!Number.isInteger(durationMinutesRaw) || durationMinutesRaw <= 0) {
+      return res.status(400).json({ message: "durationMinutes must be a positive integer." });
+    }
+    entry.durationMinutes = durationMinutesRaw;
+  }
+
+  if (note !== undefined) {
+    entry.note = note || undefined;
+  }
+
+  entry.updatedAt = new Date().toISOString();
+  return res.json(entry);
+});
+
+router.delete("/projects/:projectId/milestones/:milestoneId/tasks/:taskId/time-entries/:entryId", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const milestoneId = String(req.params.milestoneId);
+  const taskId = String(req.params.taskId);
+  const entryId = String(req.params.entryId);
+  const actorId = String(req.body?.actorId ?? "");
+
+  const context = getProjectMilestoneTaskContext(projectId, milestoneId, taskId);
+  if (!context) {
+    return res.status(404).json({ message: "Project, milestone, or task not found." });
+  }
+
+  const entry = taskTimeEntries.find((item) => item.id === entryId && item.taskId === taskId && !item.isDeleted);
+  if (!entry) {
+    return res.status(404).json({ message: "Task time entry not found." });
+  }
+
+  const canDeleteOwn = entry.userId === actorId;
+  const canDeleteAsManager = canManageProject(context.project, actorId);
+
+  if (!actorId || (!canDeleteOwn && !canDeleteAsManager)) {
+    return res.status(403).json({ message: "Only the entry owner or project owner/admin can delete this task time entry." });
+  }
+
+  entry.isDeleted = true;
+  entry.updatedAt = new Date().toISOString();
+  return res.json({ ok: true, entryId: entry.id, isDeleted: true });
 });
 
 router.post("/reactions", (req, res) => {

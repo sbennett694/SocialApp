@@ -112,6 +112,14 @@ ModerationAction *---1 (target: User | Post | Comment)
 - **Relationships:** Bridge entity between `Club` and `User`.
 - **Important constraints/rules:** Role-based authorization for moderation/admin operations inside clubs.
 
+### ClubEvent
+- **Purpose:** Club-scoped event scheduling for members/public-club audiences.
+- **Key fields:** `id`, `clubId`, `title`, `description?`, `isAllDay?`, `startAt`, `endAt?`, `locationText?`, `visibility`, `status`, `createdBy`, `createdAt`, `updatedAt`.
+- **Relationships:** Belongs to one `Club`; authored by a managing club user.
+- **Important constraints/rules:**
+  - `isAllDay` is optional and additive.
+  - When `isAllDay` is omitted, events are treated as timed by default.
+
 ### Project
 - **Purpose:** User- or club-associated project collaboration unit.
 - **Key fields:** `id`, `ownerId`, `categoryId`, `title`, `description`, optional `clubId`, `createdBy`, `createdAt`.
@@ -122,6 +130,35 @@ ModerationAction *---1 (target: User | Post | Comment)
   - Additional club associations via `ProjectClubLink`
   - Parent context for project-related `Post` activity
 - **Important constraints/rules:** Project management actions depend on owner/admin permissions (including club admin context where applicable).
+  - For club-owned projects, `createdBy` preserves the accountable user creator identity.
+
+### ProjectMilestone
+- **Purpose:** Ordered progress stage within a project.
+- **Key fields:** `id`, `projectId`, `title`, `status`, `order`, `tasks`, `createdBy`, `createdAt`, optional `startAt`, optional `dueAt`.
+- **Relationships:** Belongs to one `Project`; contains many `ProjectMilestoneTask` items.
+- **Important constraints/rules:**
+  - `startAt` and `dueAt` are optional ISO datetime strings.
+  - If both are provided, `startAt <= dueAt`.
+
+### ProjectMilestoneTask
+- **Purpose:** Checklist task nested under a project milestone.
+- **Key fields:** `id`, `text`, `isDone`, `createdBy`, `createdAt`, optional `startAt`, optional `dueAt`.
+- **Relationships:** Belongs to one `ProjectMilestone`.
+- **Important constraints/rules:**
+  - `startAt` and `dueAt` are optional ISO datetime strings.
+  - If both are provided, `startAt <= dueAt`.
+
+### TaskTimeEntry (MVP)
+- **Purpose:** Lightweight manual effort log attached to a task for accountability/progress.
+- **Key fields:** `id`, `taskId`, `userId`, `entryType` (`MANUAL`), `durationMinutes`, optional `note`, `createdAt`, `updatedAt`, optional `isDeleted`.
+- **Relationships:** Belongs to one `ProjectMilestoneTask` (via `taskId`); project/milestone context is derived through task ancestry.
+- **Important constraints/rules:**
+  - Manual-only in MVP (no timer/start-stop fields or flows).
+  - `durationMinutes` must be a positive integer.
+  - Users can create/edit their own entries.
+  - Deletes are soft-delete (`isDeleted=true`) to preserve safe auditability in-memory.
+  - Project owner/admin/moderator governance can delete invalid entries.
+  - Task totals are computed dynamically from non-deleted entries.
 
 ### ProjectClubLink
 - **Purpose:** Approval-based association between projects and clubs.
@@ -203,3 +240,22 @@ ModerationAction *---1 (target: User | Post | Comment)
 - **Important constraints/rules:**
   - `sequence` is monotonically increasing per `clubId` for deterministic ordering.
   - Intended for governance/structural events (ownership/roles/project-link governance), not general social content activity.
+  - Current governance event usage includes:
+    - `PROJECT_CREATED_FOR_CLUB`
+    - `OWNERSHIP_TRANSFERRED`
+    - `MODERATOR_ADDED`
+    - `MODERATOR_REMOVED`
+    - `MEMBER_ROLE_CHANGED`
+    - `MEMBER_REMOVED`
+    - `PROJECT_LINK_REQUESTED`
+    - `PROJECT_LINK_APPROVED`
+    - `PROJECT_LINK_REJECTED`
+    - `PROJECT_LINK_REMOVED`
+
+### Governance Notification Classification (Current)
+- Notifications are emitted for meaningful personal governance signals only:
+  - ownership transferred to the viewer
+  - viewer promoted/demoted moderator
+  - viewer removed from a club
+  - viewer project-link request approved/rejected
+- Non-personal governance events (for example club created/founder recorded/other-user governance changes) are represented in ClubHistory and not treated as notification events.
