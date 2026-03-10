@@ -22,12 +22,12 @@ export function useTemporaryHighlight(durationMs = 3200) {
     emphasis.setValue(0);
     flash.setValue(0);
 
-    // Snap-in: scale + translate settle (native driver)
+    // Snap-in: scale + translate settle
     const settleAnimation = Animated.timing(emphasis, {
       toValue: 1,
       duration: 400,
       easing: Easing.out(Easing.back(1.5)),
-      useNativeDriver: true
+      useNativeDriver: false
     });
 
     // Glow aura: flash in → 2 slow pulses → fade out (non-native for shadow/bg)
@@ -44,22 +44,30 @@ export function useTemporaryHighlight(durationMs = 3200) {
       ]),
       { iterations: 2 }
     );
-    const fadeOut = Animated.timing(flash, {
+    const fadeOutGlow = Animated.timing(flash, {
       toValue: 0,
-      duration: 600,
+      duration: 700,
       easing: Easing.in(Easing.quad),
       useNativeDriver: false
     });
+    const fadeOutEmphasis = Animated.timing(emphasis, {
+      toValue: 0,
+      duration: 700,
+      easing: Easing.inOut(Easing.quad),
+      useNativeDriver: false
+    });
+
+    const hold = Animated.delay(durationMs);
+    const flashSequence = Animated.sequence([flashIn, pulse, hold, Animated.parallel([fadeOutGlow, fadeOutEmphasis])]);
 
     settleAnimation.start();
-    Animated.sequence([flashIn, pulse, fadeOut]).start();
-
-    const timeout = setTimeout(() => {
-      setHighlightedId(null);
-    }, durationMs);
+    flashSequence.start(({ finished }) => {
+      if (finished) {
+        setHighlightedId((current) => (current === highlightedId ? null : current));
+      }
+    });
 
     return () => {
-      clearTimeout(timeout);
       settleAnimation.stop();
       flash.stopAnimation();
       emphasis.setValue(0);

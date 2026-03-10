@@ -42,6 +42,23 @@ const threadLabels: Record<ThreadType, string> = {
 const interactionThreadTypes: ThreadType[] = ["COMMENTS", "THANK_YOU", "SUGGESTIONS", "QUESTIONS"];
 const COMMENT_PREVIEW_MAX_LENGTH = 80;
 
+function formatProjectVisibilityLabel(visibility: string | undefined): string {
+  switch (visibility) {
+    case "PUBLIC":
+      return "Public";
+    case "PRIVATE":
+      return "Private";
+    case "CLUB_MEMBERS":
+      return "Club Members";
+    case "CLUB_MODERATORS":
+      return "Club Moderators";
+    case "CLUB_OWNER_ONLY":
+      return "Club Owner Only";
+    default:
+      return "Unknown";
+  }
+}
+
 function truncateCommentPreview(text: string, maxLength = COMMENT_PREVIEW_MAX_LENGTH): string {
   const normalized = text.trim();
   if (normalized.length <= maxLength) return normalized;
@@ -61,7 +78,13 @@ function buildGratitudeSummary(gratitudeResponses: Comment[]): string | undefine
 type CommonsScreenProps = {
   user: AuthUser;
   focusPostId?: string;
+  focusCommentId?: string;
+  focusThreadType?: ThreadType;
+  focusFromCommentNotification?: boolean;
   onFocusPostConsumed?: (postId: string) => void;
+  onFocusCommentConsumed?: (commentId: string) => void;
+  onFocusThreadConsumed?: (threadType: ThreadType) => void;
+  onCommentNavigationConsumed?: () => void;
   onNavigate?: (
     target: "CLUBS" | "PROJECTS",
     options?: {
@@ -117,8 +140,23 @@ function ActivityCard({
   );
 }
 
-export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate }: CommonsScreenProps) {
+export function FeedScreen({
+  user,
+  focusPostId,
+  focusCommentId,
+  focusThreadType,
+  focusFromCommentNotification,
+  onFocusPostConsumed,
+  onFocusCommentConsumed,
+  onFocusThreadConsumed,
+  onCommentNavigationConsumed,
+  onNavigate
+}: CommonsScreenProps) {
   const feedListRef = useRef<FlatList<FeedDisplayItem> | null>(null);
+  const postOffsetByIdRef = useRef<Record<string, number>>({});
+  const threadOffsetByPostIdRef = useRef<Record<string, number>>({});
+  const commentOffsetByKeyRef = useRef<Record<string, number>>({});
+  const commentScrollRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [events, setEvents] = useState<FeedEvent[]>([]);
   const [selectedFeedFilter, setSelectedFeedFilter] = useState<CommonsFeedFilter>("ALL");
   const [loading, setLoading] = useState(true);
@@ -138,8 +176,19 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [commentMessage, setCommentMessage] = useState<string | null>(null);
+  const [commentNavigationMessage, setCommentNavigationMessage] = useState<string | null>(null);
   const [pendingFocusPostId, setPendingFocusPostId] = useState<string | null>(null);
+  const [pendingFocusCommentId, setPendingFocusCommentId] = useState<string | null>(null);
+  const [pendingScrollCommentKey, setPendingScrollCommentKey] = useState<string | null>(null);
+  const [lastCompletedCommentsLoadKey, setLastCompletedCommentsLoadKey] = useState<string | null>(null);
+  const [notificationFocusLock, setNotificationFocusLock] = useState(false);
   const { highlightedId: highlightedPostId, triggerHighlight, emphasisAnimatedStyle, glowAnimatedStyle } = useTemporaryHighlight();
+  const {
+    highlightedId: highlightedCommentId,
+    triggerHighlight: triggerCommentHighlight,
+    emphasisAnimatedStyle: commentEmphasisAnimatedStyle,
+    glowAnimatedStyle: commentGlowAnimatedStyle
+  } = useTemporaryHighlight();
 
   const [postById, setPostById] = useState<Record<string, Post>>({});
   const [clubById, setClubById] = useState<Record<string, Club>>({});
@@ -232,6 +281,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
   }, [filteredEvents]);
 
   async function loadComments(postId: string, threadType: ThreadType) {
+    const loadKey = `${postId}:${threadType}`;
     setCommentsLoading(true);
     setCommentMessage(null);
     try {
@@ -241,6 +291,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
       setCommentMessage((err as Error).message);
     } finally {
       setCommentsLoading(false);
+      setLastCompletedCommentsLoadKey(loadKey);
     }
   }
 
@@ -375,15 +426,26 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
 
   useEffect(() => {
     if (!focusPostId) return;
+    const targetThreadType = focusFromCommentNotification ? (focusThreadType ?? "COMMENTS") : "COMMENTS";
+    setCommentNavigationMessage(null);
+    setNotificationFocusLock(!!focusFromCommentNotification);
+    setComments([]);
+    setLastCompletedCommentsLoadKey(null);
     setSelectedFeedFilter("ALL");
     setPendingFocusPostId(focusPostId);
     setActivePostId(focusPostId);
-    setActiveThreadType("COMMENTS");
+    setActiveThreadType(targetThreadType);
     setActiveReplyParentId(undefined);
     setCommentText("");
-    void loadComments(focusPostId, "COMMENTS");
+    void loadComments(focusPostId, targetThreadType);
     onFocusPostConsumed?.(focusPostId);
-  }, [focusPostId]);
+    onFocusThreadConsumed?.(targetThreadType);
+  }, [focusFromCommentNotification, focusPostId, focusThreadType, onFocusPostConsumed, onFocusThreadConsumed]);
+
+  useEffect(() => {
+    if (!focusCommentId) return;
+    setPendingFocusCommentId(focusCommentId);
+  }, [focusCommentId]);
 
   useEffect(() => {
     if (!pendingFocusPostId) return;
@@ -397,12 +459,58 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
     setTimeout(() => {
       feedListRef.current?.scrollToIndex({ index: focusedIndex, animated: true, viewPosition: 0.3 });
     }, 150);
-    triggerHighlight(pendingFocusPostId);
+    if (!focusFromCommentNotification) {
+      triggerHighlight(pendingFocusPostId);
+    }
     setPendingFocusPostId(null);
-  }, [displayItems, pendingFocusPostId]);
+  }, [displayItems, focusFromCommentNotification, pendingFocusPostId]);
+
+  useEffect(() => {
+    if (!focusFromCommentNotification || !activePostId || commentsLoading) return;
+    const completedCommentsKey = `${activePostId}:${activeThreadType}`;
+    if (lastCompletedCommentsLoadKey !== completedCommentsKey) return;
+
+    if (!pendingFocusCommentId) {
+      setCommentNavigationMessage("Opened post comments; specific comment unavailable.");
+      triggerHighlight(activePostId);
+      setNotificationFocusLock(false);
+      onCommentNavigationConsumed?.();
+      return;
+    }
+
+    const existsInThread = comments.some((comment) => comment.id === pendingFocusCommentId);
+    if (existsInThread) {
+      setCommentNavigationMessage(null);
+      triggerCommentHighlight(pendingFocusCommentId);
+      setPendingScrollCommentKey(`${activePostId}:${pendingFocusCommentId}`);
+      scrollToFocusedComment(activePostId, pendingFocusCommentId);
+    } else {
+      setCommentNavigationMessage("Opened post comments; specific comment unavailable.");
+      triggerHighlight(activePostId);
+    }
+
+    onFocusCommentConsumed?.(pendingFocusCommentId);
+    setNotificationFocusLock(false);
+    onCommentNavigationConsumed?.();
+    setPendingFocusCommentId(null);
+  }, [
+    activePostId,
+    activeThreadType,
+    comments,
+    commentsLoading,
+    focusFromCommentNotification,
+    lastCompletedCommentsLoadKey,
+    notificationFocusLock,
+    onCommentNavigationConsumed,
+    onFocusCommentConsumed,
+    pendingFocusCommentId,
+    triggerHighlight,
+    triggerCommentHighlight
+  ]);
 
   useEffect(() => {
     if (!activePostId) return;
+    if (notificationFocusLock) return;
     const stillVisible = filteredEvents.some((event) => event.entityType === "POST" && event.entityId === activePostId);
     if (!stillVisible) {
       setActivePostId(null);
@@ -410,7 +518,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
       setActiveReplyParentId(undefined);
       setCommentText("");
     }
-  }, [activePostId, filteredEvents]);
+  }, [activePostId, filteredEvents, notificationFocusLock]);
 
   useEffect(() => {
     if (events.length > 0 && projectIdsNeedingContext.length > 0) {
@@ -504,6 +612,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
   function getEventCard(event: FeedEvent) {
     const clubName = event.clubId ? clubById[event.clubId]?.name ?? event.clubId : undefined;
     const projectName = event.projectId ? projectById[event.projectId]?.title ?? event.projectId : undefined;
+    const projectVisibility = event.projectId ? formatProjectVisibilityLabel(projectById[event.projectId]?.visibility) : undefined;
 
     switch (event.eventType as FeedEventType) {
       case "POST_CREATED": {
@@ -538,7 +647,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
           <ActivityCard
             label="Project Highlight"
             title={projectName ? projectName : "Project"}
-            subtitle={`By @${event.actorId}`}
+            subtitle={`By @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             body={text}
             tone="project"
             footer={new Date(event.sortTimestamp).toLocaleString()}
@@ -551,7 +660,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
           <ActivityCard
             label="New Project"
             title={projectName ? projectName : "Project"}
-            subtitle={`Created by @${event.actorId}`}
+            subtitle={`Created by @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             tone="project"
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
@@ -564,7 +673,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
           <ActivityCard
             label="Milestone Completed"
             title={projectName ? projectName : "Project"}
-            subtitle={`${milestoneTitle} • @${event.actorId}`}
+            subtitle={`${milestoneTitle} • @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             tone="progress"
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
@@ -577,7 +686,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
           <ActivityCard
             label="Task Completed"
             title={projectName ? projectName : "Project"}
-            subtitle={`${taskTitle} • @${event.actorId}`}
+            subtitle={`${taskTitle} • @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             tone="progress"
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
@@ -638,6 +747,41 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
     }
   }
 
+  function scrollToFocusedComment(postId: string, commentId: string, attempt = 0) {
+    const key = `${postId}:${commentId}`;
+    const postOffset = postOffsetByIdRef.current[postId];
+    const threadOffset = threadOffsetByPostIdRef.current[postId];
+    const commentOffset = commentOffsetByKeyRef.current[key];
+
+    if (postOffset === undefined || threadOffset === undefined || commentOffset === undefined) {
+      if (attempt >= 12) {
+        return;
+      }
+
+      if (commentScrollRetryTimeoutRef.current) {
+        clearTimeout(commentScrollRetryTimeoutRef.current);
+      }
+
+      commentScrollRetryTimeoutRef.current = setTimeout(() => {
+        scrollToFocusedComment(postId, commentId, attempt + 1);
+      }, 80);
+      return;
+    }
+
+    feedListRef.current?.scrollToOffset({
+      offset: Math.max(0, postOffset + threadOffset + commentOffset - 140),
+      animated: true
+    });
+  }
+
+  useEffect(() => {
+    return () => {
+      if (commentScrollRetryTimeoutRef.current) {
+        clearTimeout(commentScrollRetryTimeoutRef.current);
+      }
+    };
+  }, []);
+
   if (loading) {
     return <ActivityIndicator style={{ marginTop: 40 }} />;
   }
@@ -647,8 +791,12 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
       ref={feedListRef}
       data={displayItems}
       keyExtractor={(item) => item.id}
-      onScrollToIndexFailed={() => {
-        feedListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      onScrollToIndexFailed={(info) => {
+        const estimatedOffset = Math.max(0, info.averageItemLength * Math.max(0, info.index - 1));
+        feedListRef.current?.scrollToOffset({ offset: estimatedOffset, animated: true });
+        setTimeout(() => {
+          feedListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.3 });
+        }, 140);
       }}
       contentContainerStyle={styles.list}
       renderItem={({ item }) => {
@@ -688,11 +836,25 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
         const isFocused = !!postId && highlightedPostId === postId;
         const interactionPreview = postId ? interactionPreviewByPostId[postId] : undefined;
         return (
-          <Animated.View style={[isFocused ? styles.focusedFeedItem : undefined, isFocused ? emphasisAnimatedStyle : undefined, isFocused ? glowAnimatedStyle : undefined]}>
+          <Animated.View
+            onLayout={
+              postId
+                ? (event) => {
+                    postOffsetByIdRef.current[postId] = event.nativeEvent.layout.y;
+                  }
+                : undefined
+            }
+            style={[isFocused ? styles.focusedFeedItem : undefined, isFocused ? emphasisAnimatedStyle : undefined, isFocused ? glowAnimatedStyle : undefined]}
+          >
             <Pressable onPress={() => void handlePressFeedTile(item)}>{getEventCard(event)}</Pressable>
 
             {postId ? (
-              <View style={styles.threadCard}>
+              <View
+                onLayout={(event) => {
+                  threadOffsetByPostIdRef.current[postId] = event.nativeEvent.layout.y;
+                }}
+                style={styles.threadCard}
+              >
                 {!isThreadExpanded && interactionPreview?.firstCommentText ? (
                   <Text style={styles.interactionPreviewText} numberOfLines={1}>
                     💬 First comment: "{interactionPreview.firstCommentText}"
@@ -743,9 +905,29 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
                       </Pressable>
                     ) : null}
                     {commentMessage ? <Text style={styles.submitMessage}>{commentMessage}</Text> : null}
+                    {commentNavigationMessage ? <Text style={styles.hint}>{commentNavigationMessage}</Text> : null}
                     {commentsLoading ? <ActivityIndicator style={{ marginTop: 8 }} /> : null}
                     {comments.map((comment) => (
-                      <View key={comment.id} style={[styles.commentRow, { marginLeft: comment.depth * 14 }]}>
+                      <Animated.View
+                        key={comment.id}
+                        onLayout={(event) => {
+                          const key = `${postId}:${comment.id}`;
+                          commentOffsetByKeyRef.current[key] = event.nativeEvent.layout.y;
+                          if (pendingScrollCommentKey === key) {
+                            setTimeout(() => {
+                              scrollToFocusedComment(postId, comment.id);
+                            }, 0);
+                            setPendingScrollCommentKey(null);
+                          }
+                        }}
+                        style={[
+                          styles.commentRow,
+                          { marginLeft: comment.depth * 14 },
+                          highlightedCommentId === comment.id ? styles.focusedCommentRow : undefined,
+                          highlightedCommentId === comment.id ? commentEmphasisAnimatedStyle : undefined,
+                          highlightedCommentId === comment.id ? commentGlowAnimatedStyle : undefined
+                        ]}
+                      >
                         <Text style={styles.author}>@{comment.authorId}</Text>
                         <Text>{comment.textContent}</Text>
                         {user.userId === event.actorId ? (
@@ -759,7 +941,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
                             <Text style={styles.replyLinkText}>Reply</Text>
                           </Pressable>
                         ) : null}
-                      </View>
+                      </Animated.View>
                     ))}
                   </>
                 ) : null}
@@ -1036,5 +1218,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#f6f9ff",
     padding: 4,
     marginBottom: 4
+  },
+  focusedCommentRow: {
+    borderColor: "#9bb8f5",
+    borderWidth: 1,
+    backgroundColor: "#f6f9ff"
   }
 });

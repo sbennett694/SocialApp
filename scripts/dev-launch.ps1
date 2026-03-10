@@ -65,6 +65,24 @@ function Start-DevWindow {
   return $proc.Id
 }
 
+function Wait-ForPortListen {
+  param(
+    [int]$Port,
+    [int]$TimeoutSeconds = 25
+  )
+
+  $start = Get-Date
+  while ((Get-Date) - $start -lt [TimeSpan]::FromSeconds($TimeoutSeconds)) {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($listener) {
+      return $true
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  return $false
+}
+
 $backendPort = Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 $knownBackendPid = Read-PidFile -Path $backendPidFile
 
@@ -77,14 +95,19 @@ if ($backendPort) {
   Write-Host "[dev-launch] Starting backend local API in a new terminal window..."
   $newBackendPid = Start-DevWindow -Title "SocialApp Backend" -WorkingDirectory (Join-Path $rootDir "backend") -Command "npm run local-api"
   Write-PidFile -Path $backendPidFile -ProcessId $newBackendPid
+
+  Write-Host "[dev-launch] Waiting for backend to listen on 127.0.0.1:3001..."
+  if (-not (Wait-ForPortListen -Port 3001 -TimeoutSeconds 30)) {
+    Write-Host "[dev-launch] Warning: backend did not report a listener on port 3001 within timeout. Continuing with Expo launch."
+  }
 }
 
 $knownMobilePid = Read-PidFile -Path $mobilePidFile
 if ($knownMobilePid -and (Test-ProcessAlive -ProcessId $knownMobilePid)) {
   Write-Host "[dev-launch] Mobile process from dev workflow already running (PID $knownMobilePid). Skipping duplicate mobile launch."
 } else {
-  Write-Host "[dev-launch] Starting mobile Expo dev server in a new terminal window..."
-  $newMobilePid = Start-DevWindow -Title "SocialApp Mobile" -WorkingDirectory (Join-Path $rootDir "mobile") -Command "npm run start"
+  Write-Host "[dev-launch] Starting mobile Expo dev server (cache clear) in a new terminal window..."
+  $newMobilePid = Start-DevWindow -Title "SocialApp Mobile" -WorkingDirectory (Join-Path $rootDir "mobile") -Command "npm run start:clear"
   Write-PidFile -Path $mobilePidFile -ProcessId $newMobilePid
 }
 

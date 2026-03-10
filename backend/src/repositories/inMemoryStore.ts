@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   Club,
   ClubEvent,
+  ClubJoinRequest,
   CloseCircleInvite,
   ClubMember,
   Comment,
@@ -91,6 +92,7 @@ export const store = {
   closeCircleInvites: [] as CloseCircleInvite[],
   clubMembers: [] as ClubMember[],
   clubs: [] as Club[],
+  clubJoinRequests: [] as ClubJoinRequest[],
   clubEvents: [] as ClubEvent[],
   projects: [] as Project[],
   projectClubLinks: [] as ProjectClubLink[],
@@ -114,6 +116,7 @@ export function resetStoreToDefault() {
   clearArray(store.closeCircleInvites);
   clearArray(store.clubMembers);
   clearArray(store.clubs);
+  clearArray(store.clubJoinRequests);
   clearArray(store.clubEvents);
   clearArray(store.projects);
   clearArray(store.projectClubLinks);
@@ -177,6 +180,7 @@ export function seedStoreWithDemoData() {
     founderId: "alex",
     ownerId: "alex",
     isPublic: true,
+    joinPolicy: "OPEN",
     description: "Build logs, shop tips, and progress updates.",
     createdAt: isoMinutesAgo(500)
   } satisfies Club;
@@ -188,6 +192,7 @@ export function seedStoreWithDemoData() {
     founderId: "jamie",
     ownerId: "jamie",
     isPublic: true,
+    joinPolicy: "OPEN",
     description: "Street and nature photo challenges.",
     createdAt: isoMinutesAgo(470)
   } satisfies Club;
@@ -199,6 +204,7 @@ export function seedStoreWithDemoData() {
     founderId: "taylor",
     ownerId: "taylor",
     isPublic: false,
+    joinPolicy: "REQUEST_REQUIRED",
     description: "Private infra tinkering and setup notes.",
     createdAt: isoMinutesAgo(450)
   } satisfies Club;
@@ -223,6 +229,7 @@ export function seedStoreWithDemoData() {
     title: "Cedar Planter Box Series",
     description: "Build 6 outdoor planters with weatherproof finish.",
     clubId: clubWood.id,
+    visibility: "PUBLIC",
     createdBy: "alex",
     createdAt: isoMinutesAgo(290)
   } satisfies Project;
@@ -234,6 +241,7 @@ export function seedStoreWithDemoData() {
     title: "Neighborhood Photo Zine",
     description: "Curate and print a 20-page mini zine.",
     clubId: clubPhoto.id,
+    visibility: "PUBLIC",
     createdBy: "jamie",
     createdAt: isoMinutesAgo(260)
   } satisfies Project;
@@ -245,6 +253,7 @@ export function seedStoreWithDemoData() {
     title: "Quiet Mini Rack Setup",
     description: "Low-noise rack with backup node and monitoring.",
     clubId: clubHomelab.id,
+    visibility: "CLUB_MEMBERS",
     createdBy: "taylor",
     createdAt: isoMinutesAgo(240)
   } satisfies Project;

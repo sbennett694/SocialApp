@@ -1,6 +1,9 @@
+import { Platform } from "react-native";
+
 export type DataMode = "mock" | "local-api" | "remote-dev";
 
-const fallbackLocalApiBaseUrl = "http://127.0.0.1:3001";
+const fallbackLocalApiBaseUrlWeb = "http://127.0.0.1:3001";
+const fallbackLocalApiBaseUrlNative = "http://10.0.2.2:3001";
 
 function normalizeLoopback(url: string): string {
   return url.replace("://localhost", "://127.0.0.1");
@@ -15,9 +18,20 @@ function resolveDataMode(rawMode: string | undefined): DataMode {
 }
 
 const dataMode = resolveDataMode(process.env.EXPO_PUBLIC_DATA_MODE);
-const localApiBaseUrl = normalizeLoopback(
-  process.env.EXPO_PUBLIC_LOCAL_API_BASE_URL ?? process.env.EXPO_PUBLIC_API_BASE_URL ?? fallbackLocalApiBaseUrl
-);
+
+function resolveLocalApiBaseUrl(): string {
+  if (Platform.OS === "web") {
+    return normalizeLoopback(process.env.EXPO_PUBLIC_LOCAL_API_BASE_URL_WEB ?? fallbackLocalApiBaseUrlWeb);
+  }
+
+  return normalizeLoopback(
+    process.env.EXPO_PUBLIC_LOCAL_API_BASE_URL ??
+      process.env.EXPO_PUBLIC_API_BASE_URL ??
+      fallbackLocalApiBaseUrlNative
+  );
+}
+
+const localApiBaseUrl = resolveLocalApiBaseUrl();
 const remoteDevApiBaseUrl =
   process.env.EXPO_PUBLIC_REMOTE_DEV_API_BASE_URL ?? process.env.EXPO_PUBLIC_API_BASE_URL ?? localApiBaseUrl;
 
@@ -36,7 +50,3 @@ export const config = {
   apiBaseUrl: resolveApiBaseUrl(dataMode),
   authMode: process.env.EXPO_PUBLIC_AUTH_MODE ?? "mock"
 };
-
-
-
-

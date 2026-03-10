@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Animated, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Animated, FlatList, InteractionManager, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import DateTimePicker, { DateTimePickerAndroid, DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import {
   Club,
@@ -20,6 +20,7 @@ import {
   ProjectHighlight,
   ProjectMilestone,
   ProjectMilestoneTask,
+  ProjectVisibility,
   requestProjectClubLink,
   reviewProjectClubLink,
   searchClubs,
@@ -65,6 +66,11 @@ export function ProjectsScreen({
   onBackToProjectsRoot,
   onNavigateToClub
 }: ProjectsScreenProps) {
+  const focusDebugEnabled = __DEV__;
+  const logFocusDebug = (...args: unknown[]) => {
+    if (!focusDebugEnabled) return;
+    console.log("[ProjectsScreen focus]", ...args);
+  };
   const {
     highlightedId: highlightedProjectId,
     triggerHighlight: triggerProjectHighlight,
@@ -77,6 +83,9 @@ export function ProjectsScreen({
     glowAnimatedStyle: nestedItemGlowAnimatedStyle
   } = useTemporaryHighlight(1800);
   const milestonesListRef = useRef<FlatList<ProjectMilestone> | null>(null);
+  const milestoneOffsetByIdRef = useRef<Record<string, number>>({});
+  const focusScrollRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingScrollIndexRef = useRef<number | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [allClubs, setAllClubs] = useState<Club[]>([]);
@@ -90,6 +99,7 @@ export function ProjectsScreen({
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [createVisibility, setCreateVisibility] = useState<ProjectVisibility>("PUBLIC");
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectTab, setProjectTab] = useState<"HIGHLIGHTS" | "MILESTONES">("HIGHLIGHTS");
@@ -144,6 +154,82 @@ export function ProjectsScreen({
     [projects, myClubs]
   );
 
+  function formatProjectVisibilityLabel(visibility: ProjectVisibility): string {
+    switch (visibility) {
+      case "PUBLIC":
+        return "Public";
+      case "PRIVATE":
+        return "Private";
+      case "CLUB_MEMBERS":
+        return "Club Members";
+      case "CLUB_MODERATORS":
+        return "Club Moderators";
+      case "CLUB_OWNER_ONLY":
+        return "Club Owner Only";
+      default:
+        return visibility;
+    }
+  }
+
+  function normalizeProjectVisibility(visibility: string | undefined): ProjectVisibility | "UNKNOWN" {
+    if (
+      visibility === "PUBLIC" ||
+      visibility === "PRIVATE" ||
+      visibility === "CLUB_MEMBERS" ||
+      visibility === "CLUB_MODERATORS" ||
+      visibility === "CLUB_OWNER_ONLY"
+    ) {
+      return visibility;
+    }
+    return "UNKNOWN";
+  }
+
+  function renderVisibilityBadge(rawVisibility: string | undefined) {
+    const visibility = normalizeProjectVisibility(rawVisibility);
+    const label = visibility === "UNKNOWN" ? "Unknown" : formatProjectVisibilityLabel(visibility);
+    const badgeStyle =
+      visibility === "PUBLIC"
+        ? styles.visibilityBadgePublic
+        : visibility === "PRIVATE"
+          ? styles.visibilityBadgePrivate
+          : visibility === "CLUB_MEMBERS"
+            ? styles.visibilityBadgeMembers
+            : visibility === "CLUB_MODERATORS"
+              ? styles.visibilityBadgeModerators
+              : visibility === "CLUB_OWNER_ONLY"
+                ? styles.visibilityBadgeOwner
+                : styles.visibilityBadgeUnknown;
+
+    return (
+      <View style={[styles.visibilityBadge, badgeStyle]}>
+        <Text style={styles.visibilityBadgeText}>{label}</Text>
+      </View>
+    );
+  }
+
+  const createVisibilityOptions = useMemo(() => {
+    if (createAs === "USER") {
+      return ["PUBLIC", "PRIVATE"] as ProjectVisibility[];
+    }
+
+    const selectedClub = myClubs.find((club) => club.id === selectedClubId);
+    if (!selectedClub) {
+      return ["PUBLIC"] as ProjectVisibility[];
+    }
+
+    if (selectedClub.isPublic === false) {
+      return ["CLUB_MEMBERS", "CLUB_MODERATORS", "CLUB_OWNER_ONLY"] as ProjectVisibility[];
+    }
+
+    return ["PUBLIC", "CLUB_MEMBERS", "CLUB_MODERATORS", "CLUB_OWNER_ONLY"] as ProjectVisibility[];
+  }, [createAs, myClubs, selectedClubId]);
+
+  useEffect(() => {
+    if (!createVisibilityOptions.includes(createVisibility)) {
+      setCreateVisibility(createVisibilityOptions[0]);
+    }
+  }, [createVisibility, createVisibilityOptions]);
+
   async function loadData() {
     setLoading(true);
     setMessage(null);
@@ -176,6 +262,7 @@ export function ProjectsScreen({
 
   useEffect(() => {
     if (!focusItemId || !focusItemType) return;
+    logFocusDebug("incoming focus item", { focusItemId, focusItemType });
     setPendingFocusItem({ id: focusItemId, type: focusItemType });
   }, [focusItemId, focusItemType]);
 
@@ -202,26 +289,69 @@ export function ProjectsScreen({
     if (!targetExists) return;
 
     if (projectTab !== "MILESTONES") {
+      logFocusDebug("switching project tab to milestones before focus scroll", pendingFocusItem);
       setProjectTab("MILESTONES");
       return;
     }
 
     const key = `${pendingFocusItem.type}:${pendingFocusItem.id}`;
-    triggerNestedItemHighlight(key);
+    const targetMilestoneId =
+      pendingFocusItem.type === "MILESTONE"
+        ? pendingFocusItem.id
+        : orderedMilestones.find((milestone) => milestone.tasks.some((task) => task.id === pendingFocusItem.id))?.id;
 
     const scrollIndex =
       pendingFocusItem.type === "MILESTONE"
         ? orderedMilestones.findIndex((m) => m.id === pendingFocusItem.id)
         : orderedMilestones.findIndex((m) => m.tasks.some((t) => t.id === pendingFocusItem.id));
 
-    if (scrollIndex >= 0) {
-      setTimeout(() => {
-        milestonesListRef.current?.scrollToIndex({ index: scrollIndex, animated: true, viewPosition: 0.3 });
-      }, 150);
-    }
+    logFocusDebug("resolved focus target", {
+      pendingFocusItem,
+      targetMilestoneId,
+      scrollIndex,
+      targetExists
+    });
 
-    onFocusItemConsumed?.(pendingFocusItem.id, pendingFocusItem.type);
-    setPendingFocusItem(null);
+    const completeFocus = () => {
+      setTimeout(() => {
+        logFocusDebug("triggering nested highlight", key);
+        triggerNestedItemHighlight(key);
+      }, 180);
+      onFocusItemConsumed?.(pendingFocusItem.id, pendingFocusItem.type);
+      setPendingFocusItem(null);
+    };
+
+    const scrollToTargetWhenReady = (attempt = 0) => {
+      const targetOffset = targetMilestoneId ? milestoneOffsetByIdRef.current[targetMilestoneId] : undefined;
+      logFocusDebug("scroll readiness check", { attempt, targetMilestoneId, targetOffset, scrollIndex });
+      if (targetOffset === undefined) {
+        if (attempt >= 10) {
+          if (scrollIndex >= 0) {
+            pendingScrollIndexRef.current = scrollIndex;
+            logFocusDebug("offset unavailable after retries; falling back to scrollToIndex", { scrollIndex });
+            milestonesListRef.current?.scrollToIndex({ index: scrollIndex, animated: true, viewPosition: 0.3 });
+          }
+          completeFocus();
+          return;
+        }
+
+        focusScrollRetryTimeoutRef.current = setTimeout(() => {
+          scrollToTargetWhenReady(attempt + 1);
+        }, 80);
+        return;
+      }
+
+      InteractionManager.runAfterInteractions(() => {
+        logFocusDebug("scrolling via offset", { targetOffset, adjustedOffset: Math.max(0, targetOffset - 120) });
+        milestonesListRef.current?.scrollToOffset({
+          offset: Math.max(0, targetOffset - 120),
+          animated: true
+        });
+        completeFocus();
+      });
+    };
+
+    scrollToTargetWhenReady();
   }, [
     onFocusItemConsumed,
     orderedMilestones,
@@ -230,6 +360,14 @@ export function ProjectsScreen({
     selectedProject,
     triggerNestedItemHighlight
   ]);
+
+  useEffect(() => {
+    return () => {
+      if (focusScrollRetryTimeoutRef.current) {
+        clearTimeout(focusScrollRetryTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setSelectedProject(null);
@@ -589,7 +727,8 @@ export function ProjectsScreen({
         clubId: createAs === "CLUB" ? selectedClubId || undefined : undefined,
         categoryId: selectedCategoryId,
         title: title.trim(),
-        description: description.trim() || undefined
+        description: description.trim() || undefined,
+        visibility: createVisibility
       });
       setCreateModalOpen(false);
       setTitle("");
@@ -1000,6 +1139,10 @@ export function ProjectsScreen({
         >
           <Text style={styles.sectionTitle}>{selectedProject.title}</Text>
           <Text style={styles.hint}>{selectedProject.description || "No description"}</Text>
+          <View style={styles.visibilityRow}>
+            <Text style={styles.hint}>Visibility:</Text>
+            {renderVisibilityBadge(selectedProject.visibility)}
+          </View>
 
           <View style={styles.clubPanel}>
             <Text style={styles.activeMilestoneTitle}>Clubs</Text>
@@ -1104,8 +1247,30 @@ export function ProjectsScreen({
           data={orderedMilestones}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
-          onScrollToIndexFailed={() => {
-            milestonesListRef.current?.scrollToEnd({ animated: true });
+          onScrollToIndexFailed={(info) => {
+            const requestedIndex = pendingScrollIndexRef.current ?? info.index;
+            const safeIndex = Math.max(0, Math.min(requestedIndex, info.highestMeasuredFrameIndex + 1));
+            logFocusDebug("scrollToIndex failed", {
+              requestedIndex,
+              highestMeasuredFrameIndex: info.highestMeasuredFrameIndex,
+              averageItemLength: info.averageItemLength,
+              safeIndex
+            });
+
+            milestonesListRef.current?.scrollToIndex({
+              index: safeIndex,
+              animated: true,
+              viewPosition: 0.3
+            });
+
+            setTimeout(() => {
+              logFocusDebug("retrying scrollToIndex after failure", { requestedIndex });
+              milestonesListRef.current?.scrollToIndex({
+                index: requestedIndex,
+                animated: true,
+                viewPosition: 0.3
+              });
+            }, 180);
           }}
           ListHeaderComponent={
             <View>
@@ -1126,10 +1291,17 @@ export function ProjectsScreen({
 
             return (
               <Animated.View
+                onLayout={(event) => {
+                  milestoneOffsetByIdRef.current[item.id] = event.nativeEvent.layout.y;
+                  logFocusDebug("milestone layout measured", {
+                    milestoneId: item.id,
+                    y: event.nativeEvent.layout.y
+                  });
+                }}
                 style={[
                   styles.card,
                   cardStyle,
-                  highlightedNestedItemId === milestoneFocusKey ? styles.focusedTargetItem : null,
+                  highlightedNestedItemId === milestoneFocusKey ? styles.focusedMilestoneItem : null,
                   highlightedNestedItemId === milestoneFocusKey ? nestedItemEmphasisAnimatedStyle : null,
                   highlightedNestedItemId === milestoneFocusKey ? nestedItemGlowAnimatedStyle : null
                 ]}
@@ -1168,7 +1340,7 @@ export function ProjectsScreen({
                       key={task.id}
                       style={[
                         styles.taskItemBlock,
-                        highlightedNestedItemId === taskFocusKey ? styles.focusedTargetItem : null,
+                        highlightedNestedItemId === taskFocusKey ? styles.focusedTaskItem : null,
                         highlightedNestedItemId === taskFocusKey ? nestedItemEmphasisAnimatedStyle : null,
                         highlightedNestedItemId === taskFocusKey ? nestedItemGlowAnimatedStyle : null
                       ]}
@@ -1232,6 +1404,10 @@ export function ProjectsScreen({
             <Text style={styles.title}>{item.title}</Text>
             <Text>{item.description || "No description"}</Text>
             <Text style={styles.hint}>Category: {categoryById.get(item.categoryId) ?? item.categoryId}</Text>
+            <View style={styles.visibilityRow}>
+              <Text style={styles.hint}>Visibility:</Text>
+              {renderVisibilityBadge(item.visibility)}
+            </View>
           </Pressable>
         )}
       />
@@ -1271,6 +1447,21 @@ export function ProjectsScreen({
 
               <TextInput value={title} onChangeText={setTitle} placeholder="Project title" style={styles.input} />
               <TextInput value={description} onChangeText={setDescription} placeholder="Project description" style={styles.input} />
+
+              <Text style={styles.label}>Visibility</Text>
+              <View style={styles.rowWrap}>
+                {createVisibilityOptions.map((option) => (
+                  <Pressable
+                    key={option}
+                    onPress={() => setCreateVisibility(option)}
+                    style={[styles.pill, createVisibility === option && styles.pillActive]}
+                  >
+                    <Text style={[styles.pillText, createVisibility === option && styles.pillTextActive]}>
+                      {formatProjectVisibilityLabel(option)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
             </ScrollView>
             <View style={styles.rowWrap}>
               <Pressable onPress={handleCreateProject} style={styles.buttonInline}><Text style={styles.buttonText}>Create</Text></Pressable>
@@ -1313,7 +1504,14 @@ const styles = StyleSheet.create({
   activeMilestoneTaskBlock: { marginTop: 4 },
   taskRow: { paddingVertical: 3, flexDirection: "row", alignItems: "center" }
   ,
-  taskItemBlock: { marginBottom: 10 },
+  taskItemBlock: {
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    padding: 8,
+    backgroundColor: "#fff"
+  },
   clubPanel: { marginTop: 6, borderWidth: 1, borderColor: "#d9d9d9", borderRadius: 8, padding: 8, marginBottom: 8 },
   pendingCard: { borderWidth: 1, borderColor: "#e5e5e5", borderRadius: 8, padding: 8, marginTop: 6 },
   taskInput: { borderWidth: 1, borderColor: "#bbb", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12, fontSize: 16, marginBottom: 8 },
@@ -1339,8 +1537,54 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     backgroundColor: "#f6f9ff"
   },
-  focusedTargetItem: {
+  focusedMilestoneItem: {
     borderColor: "#f59e0b",
     borderWidth: 2
+  },
+  focusedTaskItem: {
+    borderColor: "#f59e0b",
+    borderWidth: 2,
+    borderRadius: 10,
+    backgroundColor: "#fff8eb"
+  },
+  visibilityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 6
+  },
+  visibilityBadge: {
+    borderRadius: 999,
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderWidth: 1
+  },
+  visibilityBadgeText: {
+    fontSize: 11,
+    fontWeight: "700"
+  },
+  visibilityBadgePublic: {
+    backgroundColor: "#e8f6ee",
+    borderColor: "#86d2a7"
+  },
+  visibilityBadgePrivate: {
+    backgroundColor: "#fdecec",
+    borderColor: "#f3a7a7"
+  },
+  visibilityBadgeMembers: {
+    backgroundColor: "#eaf1ff",
+    borderColor: "#a8c2ff"
+  },
+  visibilityBadgeModerators: {
+    backgroundColor: "#fff4e5",
+    borderColor: "#ffd08a"
+  },
+  visibilityBadgeOwner: {
+    backgroundColor: "#f3ecff",
+    borderColor: "#c8b1ff"
+  },
+  visibilityBadgeUnknown: {
+    backgroundColor: "#f2f2f2",
+    borderColor: "#cccccc"
   }
 });

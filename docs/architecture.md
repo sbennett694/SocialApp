@@ -321,9 +321,10 @@ Create Club and Create Project modal UX now uses a shared mobile-friendly patter
 ## Environment / Configuration
 - Mobile env:
   - `EXPO_PUBLIC_DATA_MODE` (`local-api` default; supported: `mock`, `local-api`, `remote-dev`)
-  - `EXPO_PUBLIC_LOCAL_API_BASE_URL` (default `http://127.0.0.1:3001`)
+  - `EXPO_PUBLIC_LOCAL_API_BASE_URL_WEB` (optional web override; default `http://127.0.0.1:3001`)
+  - `EXPO_PUBLIC_LOCAL_API_BASE_URL` (native local-api base URL; default `http://10.0.2.2:3001`)
   - `EXPO_PUBLIC_REMOTE_DEV_API_BASE_URL` (remote shared dev backend when using `remote-dev`)
-  - `EXPO_PUBLIC_API_BASE_URL` (defaults to `http://127.0.0.1:3001`)
+  - `EXPO_PUBLIC_API_BASE_URL` (shared fallback used by native local mode and `remote-dev`; web local mode does not use this fallback)
   - `EXPO_PUBLIC_AUTH_MODE` (`mock` default)
 - Backend local port:
   - `PORT` (default 3001 in `localServer.ts`)
@@ -355,7 +356,8 @@ SocialApp supports multiple development data modes without requiring AWS for day
 1. Edit `mobile/.env` (copy from `.env.example` if needed).
 2. Set `EXPO_PUBLIC_DATA_MODE` to one of: `mock`, `local-api`, `remote-dev`.
 3. Set base URL variables:
-   - Local mode: `EXPO_PUBLIC_LOCAL_API_BASE_URL=http://127.0.0.1:3001`
+   - Local mode (web): `EXPO_PUBLIC_LOCAL_API_BASE_URL_WEB=http://127.0.0.1:3001`
+   - Local mode (Android emulator/native): `EXPO_PUBLIC_LOCAL_API_BASE_URL=http://10.0.2.2:3001`
    - Remote mode: `EXPO_PUBLIC_REMOTE_DEV_API_BASE_URL=https://<your-dev-api>`
 4. Restart Expo after env changes.
 

@@ -29,9 +29,20 @@ export type CloseCircleInviteStatus = "PENDING" | "ACCEPTED" | "DECLINED" | "BLO
 
 export type ClubMemberRole = "MEMBER" | "MODERATOR" | "OWNER";
 
+export type ClubJoinPolicy = "OPEN" | "REQUEST_REQUIRED" | "INVITE_ONLY";
+
+export type ClubJoinRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
+
 export type ClubEventVisibility = "CLUB_MEMBERS" | "PUBLIC_CLUB";
 
 export type ClubEventStatus = "SCHEDULED" | "CANCELLED";
+
+export type ProjectVisibility =
+  | "PUBLIC"
+  | "PRIVATE"
+  | "CLUB_MEMBERS"
+  | "CLUB_MODERATORS"
+  | "CLUB_OWNER_ONLY";
 
 export type TaskTimeEntryType = "MANUAL";
 
@@ -72,9 +83,19 @@ export type Club = {
   founderId: string;
   ownerId: string;
   isPublic: boolean;
+  joinPolicy?: ClubJoinPolicy;
   createdAt: string;
   description?: string;
   rules?: string;
+};
+
+export type ClubJoinRequest = {
+  clubId: string;
+  userId: string;
+  status: ClubJoinRequestStatus;
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
 };
 
 export type ClubMember = {
@@ -107,6 +128,7 @@ export type Project = {
   title: string;
   description?: string;
   clubId?: string;
+  visibility: ProjectVisibility;
   createdBy?: string;
   createdAt: string;
 };

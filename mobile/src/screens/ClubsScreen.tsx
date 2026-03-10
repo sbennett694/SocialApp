@@ -6,13 +6,18 @@ import {
   Club,
   ClubEvent,
   ClubHistoryEvent,
+  ClubJoinPolicy,
+  ClubJoinRequest,
   ClubMember,
+  createClubJoinRequest,
   createClubEvent,
   createPost,
   createClub,
   getCategories,
   getClubEvents,
   getClubHistory,
+  getClubJoinRequests,
+  getClubJoinRequestStatus,
   getProjectClubLinks,
   getClubMembers,
   getClubProjects,
@@ -24,6 +29,7 @@ import {
   Project,
   ProjectClubLink,
   reviewProjectClubLink,
+  reviewClubJoinRequest,
   searchClubs,
   updateClubMemberRole,
   updateClub
@@ -47,6 +53,53 @@ type ClubProjectRequest = {
   project: Project;
   link: ProjectClubLink;
 };
+
+type ClubAdminStats = {
+  canManage: boolean;
+  membersCount: number;
+  pendingJoinRequestsCount: number;
+};
+
+function formatProjectVisibilityLabel(visibility: string): string {
+  switch (visibility) {
+    case "PUBLIC":
+      return "Public";
+    case "PRIVATE":
+      return "Private";
+    case "CLUB_MEMBERS":
+      return "Club Members";
+    case "CLUB_MODERATORS":
+      return "Club Moderators";
+    case "CLUB_OWNER_ONLY":
+      return "Club Owner Only";
+    default:
+      return "Unknown";
+  }
+}
+
+function formatClubVisibilityLabel(isPublic: boolean | undefined): string {
+  return isPublic === false ? "Private Club" : "Public Club";
+}
+
+function resolveEffectiveJoinPolicy(club: Club): ClubJoinPolicy {
+  if (club.joinPolicy === "OPEN" || club.joinPolicy === "REQUEST_REQUIRED" || club.joinPolicy === "INVITE_ONLY") {
+    return club.joinPolicy;
+  }
+  return club.isPublic === false ? "REQUEST_REQUIRED" : "OPEN";
+}
+
+function formatJoinPolicyLabel(policy: ClubJoinPolicy): string {
+  switch (policy) {
+    case "OPEN":
+      return "Open";
+    case "REQUEST_REQUIRED":
+      return "Request Required";
+    case "INVITE_ONLY":
+      return "Invite Only";
+    default:
+      return "Open";
+  }
+}
 
 export function ClubsScreen({
   user,
@@ -95,8 +148,10 @@ export function ClubsScreen({
   const [editClubName, setEditClubName] = useState("");
   const [editClubDescription, setEditClubDescription] = useState("");
   const [editClubIsPublic, setEditClubIsPublic] = useState(true);
+  const [editClubJoinPolicy, setEditClubJoinPolicy] = useState<ClubJoinPolicy>("OPEN");
 
   const [createEventModalOpen, setCreateEventModalOpen] = useState(false);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [newEventTitle, setNewEventTitle] = useState("");
   const [newEventDescription, setNewEventDescription] = useState("");
   const [newEventIsAllDay, setNewEventIsAllDay] = useState(false);
@@ -118,6 +173,10 @@ export function ClubsScreen({
   const [clubEvents, setClubEvents] = useState<ClubEvent[]>([]);
   const [clubHistoryEvents, setClubHistoryEvents] = useState<ClubHistoryEvent[]>([]);
   const [clubProjectRequests, setClubProjectRequests] = useState<ClubProjectRequest[]>([]);
+  const [clubJoinRequests, setClubJoinRequests] = useState<ClubJoinRequest[]>([]);
+  const [clubJoinRequestStatus, setClubJoinRequestStatus] = useState<ClubJoinRequest | null>(null);
+  const [pendingJoinRequestClubIds, setPendingJoinRequestClubIds] = useState<string[]>([]);
+  const [clubAdminStatsByClubId, setClubAdminStatsByClubId] = useState<Record<string, ClubAdminStats>>({});
   const [clubDetailLoading, setClubDetailLoading] = useState(false);
   const [clubHighlightText, setClubHighlightText] = useState("");
   const [pendingFocusClubPostId, setPendingFocusClubPostId] = useState<string | null>(null);
@@ -159,6 +218,66 @@ export function ClubsScreen({
   useEffect(() => {
     loadData();
   }, [user.userId, clubSearch, clubFeedFilterClubId]);
+
+  useEffect(() => {
+    if (myClubs.length === 0) {
+      setClubAdminStatsByClubId({});
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadClubAdminStats() {
+      const entries = await Promise.all(
+        myClubs.map(async (club) => {
+          try {
+            const members = await getClubMembers(club.id);
+            const viewerRole = members.find((member) => member.userId === user.userId)?.role;
+            const canManage = viewerRole === "OWNER" || viewerRole === "MODERATOR";
+
+            if (!canManage) {
+              return [
+                club.id,
+                {
+                  canManage: false,
+                  membersCount: members.length,
+                  pendingJoinRequestsCount: 0
+                } satisfies ClubAdminStats
+              ] as const;
+            }
+
+            const joinRequests = await getClubJoinRequests(club.id, user.userId);
+            return [
+              club.id,
+              {
+                canManage: true,
+                membersCount: members.length,
+                pendingJoinRequestsCount: joinRequests.length
+              } satisfies ClubAdminStats
+            ] as const;
+          } catch {
+            return [
+              club.id,
+              {
+                canManage: false,
+                membersCount: 0,
+                pendingJoinRequestsCount: 0
+              } satisfies ClubAdminStats
+            ] as const;
+          }
+        })
+      );
+
+      if (cancelled) return;
+      setClubAdminStatsByClubId(Object.fromEntries(entries));
+    }
+
+    void loadClubAdminStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [myClubs, user.userId]);
 
   useEffect(() => {
     setViewingClub(null);
@@ -208,10 +327,27 @@ export function ClubsScreen({
     viewingClub
   ]);
 
-  async function handleJoinClub(clubId: string, clubName: string) {
+  async function handleJoinClub(club: Club) {
     try {
-      await joinClub(clubId, user.userId);
-      setMessage(`Joined ${clubName}`);
+      const joinPolicy = resolveEffectiveJoinPolicy(club);
+      if (joinPolicy === "OPEN") {
+        await joinClub(club.id, user.userId);
+        setMessage(`Joined ${club.name}`);
+      } else if (joinPolicy === "REQUEST_REQUIRED") {
+        setPendingJoinRequestClubIds((current) => (current.includes(club.id) ? current : [...current, club.id]));
+        if (viewingClub?.id === club.id) {
+          setClubJoinRequestStatus({
+            clubId: club.id,
+            userId: user.userId,
+            status: "PENDING",
+            createdAt: new Date().toISOString()
+          });
+        }
+        await createClubJoinRequest(club.id, user.userId);
+        setMessage(`Request sent 🤞 to ${club.name}.`);
+      } else {
+        setMessage(`${club.name} is invite only.`);
+      }
       loadData();
     } catch (err) {
       setMessage((err as Error).message);
@@ -263,10 +399,29 @@ export function ClubsScreen({
       const viewerRole = members.find((member) => member.userId === user.userId)?.role;
       const canManage = viewerRole === "OWNER" || viewerRole === "MODERATOR";
 
+      try {
+        const joinStatus = await getClubJoinRequestStatus(club.id, user.userId);
+        setClubJoinRequestStatus(joinStatus);
+        if (joinStatus?.status === "PENDING") {
+          setPendingJoinRequestClubIds((current) => (current.includes(club.id) ? current : [...current, club.id]));
+        }
+      } catch (err) {
+        const message = (err as Error).message || "";
+        if (message.includes("404")) {
+          setClubJoinRequestStatus(null);
+        } else {
+          throw err;
+        }
+      }
+
       if (!canManage) {
+        setClubJoinRequests([]);
         setClubProjectRequests([]);
         return;
       }
+
+      const pendingJoinRequests = await getClubJoinRequests(club.id, user.userId);
+      setClubJoinRequests(pendingJoinRequests);
 
       const allProjects = await getProjects();
       const pendingRequests = (
@@ -286,6 +441,55 @@ export function ClubsScreen({
       setMessage((err as Error).message);
     } finally {
       setClubDetailLoading(false);
+    }
+  }
+
+  async function handleReviewJoinRequest(targetUserId: string, status: "APPROVED" | "REJECTED") {
+    if (!viewingClub) return;
+    try {
+      await reviewClubJoinRequest({
+        clubId: viewingClub.id,
+        userId: targetUserId,
+        actorId: user.userId,
+        status
+      });
+      setMessage(status === "APPROVED" ? `Approved @${targetUserId}` : `Rejected @${targetUserId}`);
+      await openClubDetail(viewingClub);
+      loadData();
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  }
+
+  async function handleSetJoinPolicy(joinPolicy: ClubJoinPolicy) {
+    if (!viewingClub) return;
+    try {
+      await updateClub({
+        clubId: viewingClub.id,
+        viewerId: user.userId,
+        joinPolicy
+      });
+      setMessage(`Join rule updated to ${formatJoinPolicyLabel(joinPolicy)}.`);
+      await openClubDetail({ ...viewingClub, joinPolicy });
+      loadData();
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  }
+
+  async function handleSetClubVisibility(isPublic: boolean) {
+    if (!viewingClub) return;
+    try {
+      await updateClub({
+        clubId: viewingClub.id,
+        viewerId: user.userId,
+        isPublic
+      });
+      setMessage(`Club visibility set to ${isPublic ? "Public" : "Private"}.`);
+      await openClubDetail({ ...viewingClub, isPublic });
+      loadData();
+    } catch (err) {
+      setMessage((err as Error).message);
     }
   }
 
@@ -351,6 +555,7 @@ export function ClubsScreen({
     setEditClubName(club.name);
     setEditClubDescription(club.description ?? "");
     setEditClubIsPublic(club.isPublic !== false);
+    setEditClubJoinPolicy(resolveEffectiveJoinPolicy(club));
     setEditModalOpen(true);
   }
 
@@ -367,7 +572,8 @@ export function ClubsScreen({
         viewerId: user.userId,
         name: editClubName.trim(),
         description: editClubDescription.trim(),
-        isPublic: editClubIsPublic
+        isPublic: editClubIsPublic,
+        joinPolicy: editClubJoinPolicy
       });
       setEditModalOpen(false);
       setEditingClub(null);
@@ -651,6 +857,7 @@ export function ClubsScreen({
     : null;
   const canManageClub = viewerMembership?.role === "OWNER" || viewerMembership?.role === "MODERATOR";
   const isOwner = viewerMembership?.role === "OWNER";
+  const activeJoinPolicy = viewingClub ? resolveEffectiveJoinPolicy(viewingClub) : "OPEN";
   const sortedClubEvents = [...clubEvents].sort((a, b) => {
     const timeDiff = new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
     if (timeDiff !== 0) return timeDiff;
@@ -786,6 +993,11 @@ export function ClubsScreen({
   }
 
   if (viewingClub) {
+    const isClubMember = !!viewerMembership;
+    const isPendingJoinRequest = clubJoinRequestStatus?.status === "PENDING";
+    const isApprovedJoinRequest = clubJoinRequestStatus?.status === "APPROVED";
+    const isRejectedJoinRequest = clubJoinRequestStatus?.status === "REJECTED";
+
     return (
       <FlatList
         data={[]}
@@ -810,10 +1022,72 @@ export function ClubsScreen({
                 highlightedClubId === viewingClub.id ? clubEmphasisAnimatedStyle : null
               ]}
             >
-              <Text style={styles.sectionTitle}>{viewingClub.name}</Text>
-              <Text style={styles.hint}>Founder: @{viewingClub.ownerId ?? "unknown"}</Text>
-              <Text style={styles.hint}>{viewingClub.description || "No club description yet."}</Text>
+              <View style={styles.clubHeaderRow}>
+                <View style={styles.clubHeaderMain}>
+                  <Text style={styles.sectionTitle}>{viewingClub.name}</Text>
+                  <View style={styles.visibilityRow}>
+                    <Text style={styles.hint}>Visibility:</Text>
+                    <View style={styles.visibilityBadge}>
+                      <Text style={styles.visibilityBadgeText}>{formatClubVisibilityLabel(viewingClub.isPublic)}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.visibilityRow}>
+                    <Text style={styles.hint}>Join Rule:</Text>
+                    <View style={styles.visibilityBadge}>
+                      <Text style={styles.visibilityBadgeText}>{formatJoinPolicyLabel(activeJoinPolicy)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.hint}>Founder: @{viewingClub.ownerId ?? "unknown"}</Text>
+                  <Text style={styles.hint}>{viewingClub.description || "No club description yet."}</Text>
+                </View>
+
+                {!canManageClub ? (
+                  <View style={styles.joinCtaBox}>
+                    {!isClubMember ? (
+                      <>
+                        <Text style={styles.joinCtaTitle}>Membership</Text>
+                        <Text style={styles.joinCtaHint}>Choose how to join this club.</Text>
+                        {activeJoinPolicy === "OPEN" ? (
+                          <Pressable onPress={() => handleJoinClub(viewingClub)} style={styles.buttonInline}>
+                            <Text style={styles.buttonText}>Join Club</Text>
+                          </Pressable>
+                        ) : null}
+                        {activeJoinPolicy === "REQUEST_REQUIRED" ? (
+                          <Pressable
+                            onPress={() => handleJoinClub(viewingClub)}
+                            style={styles.buttonInline}
+                            disabled={isPendingJoinRequest}
+                          >
+                            <Text style={styles.buttonText}>{isPendingJoinRequest ? "Request sent 🤞" : "🥺 Request to Join"}</Text>
+                          </Pressable>
+                        ) : null}
+                        {activeJoinPolicy === "INVITE_ONLY" ? (
+                          <View style={styles.visibilityBadge}>
+                            <Text style={styles.visibilityBadgeText}>Invite Only</Text>
+                          </View>
+                        ) : null}
+                        {isApprovedJoinRequest ? <Text style={styles.joinCtaStatus}>Your request is approved. You can join now.</Text> : null}
+                        {isRejectedJoinRequest ? <Text style={styles.joinCtaStatus}>Your last request was rejected.</Text> : null}
+                      </>
+                    ) : (
+                      <>
+                        <Text style={styles.joinCtaTitle}>Membership</Text>
+                        <View style={styles.visibilityBadge}>
+                          <Text style={styles.visibilityBadgeText}>You are a member</Text>
+                        </View>
+                      </>
+                    )}
+                  </View>
+                ) : null}
+              </View>
             </Animated.View>
+
+            {canManageClub ? (
+              <Pressable onPress={() => setAdminPanelOpen(true)} style={styles.buttonInline}>
+                <Text style={styles.buttonText}>Open Admin Panel</Text>
+              </Pressable>
+            ) : null}
+
             {message ? <Text style={styles.message}>{message}</Text> : null}
 
             <View style={styles.rowWrap}>
@@ -949,6 +1223,12 @@ export function ClubsScreen({
                   <Pressable key={`club-project-${item.id}`} style={styles.card} onPress={() => onNavigateToProject?.(item.id)}>
                     <Text style={styles.clubName}>{item.title}</Text>
                     <Text style={styles.openHint}>Tap to open project</Text>
+                    <View style={styles.visibilityRow}>
+                      <Text style={styles.hint}>Visibility:</Text>
+                      <View style={styles.visibilityBadge}>
+                        <Text style={styles.visibilityBadgeText}>{formatProjectVisibilityLabel(item.visibility)}</Text>
+                      </View>
+                    </View>
                     <Text style={styles.hint}>{item.description || "No description"}</Text>
                     <Text style={styles.hint}>Owner: @{item.ownerId}</Text>
                     {item.createdBy ? <Text style={styles.hint}>Created by: @{item.createdBy}</Text> : null}
@@ -965,6 +1245,12 @@ export function ClubsScreen({
                   ? clubProjectRequests.map((request) => (
                       <View key={`club-request-${request.project.id}`} style={styles.card}>
                         <Text style={styles.clubName}>{request.project.title}</Text>
+                        <View style={styles.visibilityRow}>
+                          <Text style={styles.hint}>Visibility:</Text>
+                          <View style={styles.visibilityBadge}>
+                            <Text style={styles.visibilityBadgeText}>{formatProjectVisibilityLabel(request.project.visibility)}</Text>
+                          </View>
+                        </View>
                         <Pressable onPress={() => onNavigateToProject?.(request.project.id)}>
                           <Text style={styles.openHint}>Open project</Text>
                         </Pressable>
@@ -1255,6 +1541,80 @@ export function ClubsScreen({
                 </View>
               </View>
             </Modal>
+
+            <Modal visible={adminPanelOpen} transparent animationType="fade" onRequestClose={() => setAdminPanelOpen(false)}>
+              <View style={styles.modalBackdrop}>
+                <Pressable style={StyleSheet.absoluteFill} onPress={() => setAdminPanelOpen(false)} />
+                <View style={styles.modalCard}>
+                  <Text style={styles.sectionTitle}>Club Admin Panel</Text>
+                  <Text style={styles.hint}>Owner/admin tools for this club.</Text>
+
+                  <Text style={styles.filterLabel}>Club Visibility</Text>
+                  <View style={styles.rowWrap}>
+                    <Pressable
+                      onPress={() => handleSetClubVisibility(true)}
+                      style={[styles.pill, viewingClub.isPublic !== false && styles.pillActive]}
+                    >
+                      <Text style={[styles.pillText, viewingClub.isPublic !== false && styles.pillTextActive]}>Public</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleSetClubVisibility(false)}
+                      style={[styles.pill, viewingClub.isPublic === false && styles.pillActive]}
+                    >
+                      <Text style={[styles.pillText, viewingClub.isPublic === false && styles.pillTextActive]}>Private</Text>
+                    </Pressable>
+                  </View>
+
+                  <Text style={styles.filterLabel}>Join Rules</Text>
+                  <View style={styles.rowWrap}>
+                    {(["OPEN", "REQUEST_REQUIRED", "INVITE_ONLY"] as ClubJoinPolicy[]).map((policy) => {
+                      const active = activeJoinPolicy === policy;
+                      return (
+                        <Pressable key={`admin-join-rule-${policy}`} onPress={() => handleSetJoinPolicy(policy)} style={[styles.pill, active && styles.pillActive]}>
+                          <Text style={[styles.pillText, active && styles.pillTextActive]}>{formatJoinPolicyLabel(policy)}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={styles.filterLabel}>Join Requests</Text>
+                  <ScrollView style={{ maxHeight: 220 }}>
+                    {clubJoinRequests.length === 0 ? <Text style={styles.hint}>No pending join requests.</Text> : null}
+                    {clubJoinRequests.map((request) => (
+                      <View key={`admin-join-request-${request.clubId}-${request.userId}`} style={styles.card}>
+                        <Text style={styles.clubName}>@{request.userId}</Text>
+                        <Text style={styles.hint}>Requested: {new Date(request.createdAt).toLocaleString()}</Text>
+                        <View style={styles.rowWrap}>
+                          <Pressable onPress={() => handleReviewJoinRequest(request.userId, "APPROVED")} style={styles.buttonInline}>
+                            <Text style={styles.buttonText}>Approve</Text>
+                          </Pressable>
+                          <Pressable onPress={() => handleReviewJoinRequest(request.userId, "REJECTED")} style={styles.buttonInline}>
+                            <Text style={styles.buttonText}>Reject</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </ScrollView>
+
+                  <Text style={styles.filterLabel}>Other Admin Tools</Text>
+                  <Pressable
+                    onPress={() => {
+                      setAdminPanelOpen(false);
+                      setClubDetailTab("PROJECT_REQUESTS");
+                    }}
+                    style={styles.buttonInline}
+                  >
+                    <Text style={styles.buttonText}>Open Project Requests</Text>
+                  </Pressable>
+
+                  <View style={styles.rowWrap}>
+                    <Pressable onPress={() => setAdminPanelOpen(false)} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Close Admin Panel</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            </Modal>
           </View>
         }
         renderItem={() => null}
@@ -1309,7 +1669,25 @@ export function ClubsScreen({
                     <Text style={styles.clubName}>{item.name}</Text>
                     <Text style={styles.openHint}>Open ›</Text>
                   </View>
+                  <View style={styles.visibilityRow}>
+                    <Text style={styles.hint}>Visibility:</Text>
+                    <View style={styles.visibilityBadge}>
+                      <Text style={styles.visibilityBadgeText}>{formatClubVisibilityLabel(item.isPublic)}</Text>
+                    </View>
+                  </View>
                   <Text style={styles.hint}>{item.description || "No description yet"}</Text>
+                  {clubAdminStatsByClubId[item.id]?.canManage ? (
+                    <View style={styles.rowWrap}>
+                      <View style={styles.visibilityBadge}>
+                        <Text style={styles.visibilityBadgeText}>Members: {clubAdminStatsByClubId[item.id].membersCount}</Text>
+                      </View>
+                      <View style={styles.visibilityBadge}>
+                        <Text style={styles.visibilityBadgeText}>
+                          Join Requests: {clubAdminStatsByClubId[item.id].pendingJoinRequestsCount}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
                   <Text style={styles.tapHint}>Tap card to open club</Text>
                 </Pressable>
                 {isOwnerClub ? (
@@ -1391,6 +1769,12 @@ export function ClubsScreen({
                       <Text style={styles.clubName}>{club.name}</Text>
                       <Text style={styles.openHint}>Open ›</Text>
                     </View>
+                    <View style={styles.visibilityRow}>
+                      <Text style={styles.hint}>Visibility:</Text>
+                      <View style={styles.visibilityBadge}>
+                        <Text style={styles.visibilityBadgeText}>{formatClubVisibilityLabel(club.isPublic)}</Text>
+                      </View>
+                    </View>
                     <Text style={styles.hint}>{club.description || "No description"}</Text>
                     <Text style={styles.tapHint}>Tap card to open club</Text>
                   </View>
@@ -1413,12 +1797,34 @@ export function ClubsScreen({
                   <Text style={styles.clubName}>{item.name}</Text>
                   <Text style={styles.openHint}>Open ›</Text>
                 </View>
+                <View style={styles.visibilityRow}>
+                  <Text style={styles.hint}>Visibility:</Text>
+                  <View style={styles.visibilityBadge}>
+                    <Text style={styles.visibilityBadgeText}>{formatClubVisibilityLabel(item.isPublic)}</Text>
+                  </View>
+                </View>
                 <Text style={styles.hint}>{item.description || "User-created club"}</Text>
                 <Text style={styles.tapHint}>Tap card to open club</Text>
               </Pressable>
-              <Pressable onPress={() => handleJoinClub(item.id, item.name)} style={styles.button}>
-                <Text style={styles.buttonText}>Join Club</Text>
-              </Pressable>
+              {resolveEffectiveJoinPolicy(item) === "INVITE_ONLY" ? (
+                <View style={styles.visibilityBadge}>
+                  <Text style={styles.visibilityBadgeText}>Invite Only</Text>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => handleJoinClub(item)}
+                  style={[styles.button, resolveEffectiveJoinPolicy(item) === "REQUEST_REQUIRED" && pendingJoinRequestClubIds.includes(item.id) ? styles.buttonDisabled : null]}
+                  disabled={resolveEffectiveJoinPolicy(item) === "REQUEST_REQUIRED" && pendingJoinRequestClubIds.includes(item.id)}
+                >
+                  <Text style={styles.buttonText}>
+                    {resolveEffectiveJoinPolicy(item) === "REQUEST_REQUIRED"
+                      ? pendingJoinRequestClubIds.includes(item.id)
+                        ? "Request sent 🤞"
+                        : "🥺 Request to Join"
+                      : "Join Club"}
+                  </Text>
+                </Pressable>
+              )}
             </View>
           )}
         />
@@ -1588,6 +1994,18 @@ export function ClubsScreen({
               </Pressable>
             </View>
 
+            <Text style={styles.filterLabel}>Join Rule</Text>
+            <View style={styles.rowWrap}>
+              {(["OPEN", "REQUEST_REQUIRED", "INVITE_ONLY"] as ClubJoinPolicy[]).map((policy) => {
+                const active = editClubJoinPolicy === policy;
+                return (
+                  <Pressable key={`edit-join-policy-${policy}`} onPress={() => setEditClubJoinPolicy(policy)} style={[styles.pill, active && styles.pillActive]}>
+                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{formatJoinPolicyLabel(policy)}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             <View style={styles.rowWrap}>
               <Pressable onPress={handleSaveClubEdit} style={styles.buttonInline}>
                 <Text style={styles.buttonText}>Save</Text>
@@ -1682,6 +2100,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     alignItems: "center"
   },
+  buttonDisabled: {
+    opacity: 0.6,
+    backgroundColor: "#f1f1f1"
+  },
   buttonInline: {
     borderWidth: 1,
     borderColor: "#444",
@@ -1760,6 +2182,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#777"
   },
+  clubHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10
+  },
+  clubHeaderMain: {
+    flex: 1
+  },
+  joinCtaBox: {
+    minWidth: 132,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: "#fafafa"
+  },
+  joinCtaTitle: {
+    fontWeight: "700",
+    marginBottom: 4
+  },
+  joinCtaHint: {
+    fontSize: 12,
+    color: "#666",
+    marginBottom: 8
+  },
+  joinCtaStatus: {
+    fontSize: 12,
+    color: "#555",
+    marginTop: 6
+  },
   focusedTargetCard: {
     borderColor: "#9bb8f5",
     borderWidth: 1,
@@ -1769,6 +2221,25 @@ const styles = StyleSheet.create({
     borderColor: "#9bb8f5",
     borderWidth: 1,
     backgroundColor: "#f6f9ff"
+  },
+  visibilityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 6
+  },
+  visibilityBadge: {
+    borderWidth: 1,
+    borderColor: "#a8c2ff",
+    backgroundColor: "#eaf1ff",
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: 8
+  },
+  visibilityBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1b2a57"
   },
   clubHighlightsList: {
     maxHeight: 340

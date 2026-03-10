@@ -15,7 +15,7 @@ Android-first social app built with React Native (Expo) and an AWS serverless ba
 
 ## Quick Start (after installing Node.js)
 1. Install Node.js LTS (18+ recommended).
-   - Windows: https://nodejs.org/
+   - Windows: https://node --pjs.org/
    - Verify: `node -v` and `npm -v`
 2. Mobile app:
    - `cd mobile`
@@ -75,6 +75,57 @@ To make feature testing easier, local API now includes **dev-only seed/reset end
 
 ### 4) Reset + reseed in one command
 - `npm --prefix backend run dev:reseed`
+
+### 5) Generate targeted local test data (deterministic)
+- Generic modular generator:
+  - `npm --prefix backend run dev:generate -- <command> [options]`
+- Ready-made notification navigation scenario:
+  - `npm --prefix backend run dev:scenario:comment-nav -- --post-author alex --commenter jamie --count 2`
+- Batch orchestrator (run one or many generators in sequence):
+  - `npm --prefix backend run dev:generate:batch -- --preset core`
+  - Default behavior runs for all 3 users: `alex,jamie,taylor`
+
+Supported generator commands:
+- `create-clubs`
+- `create-projects`
+- `create-milestones`
+- `create-tasks`
+- `create-comments`
+- `scenario-comment-nav`
+
+Common options:
+- `--actor <userId>`
+- `--count <n>` (interactive prompt appears in terminal if omitted)
+- `--prefix "Alex Test ..."`
+- `--delay-ms <ms>` (useful for timestamp spacing)
+
+Visibility behavior for public/private-capable generated content:
+- **Clubs (`create-clubs`)**: minimum 2 are created; first is **public**, second is **private**, additional are public.
+- **Comment-nav scenario posts (`scenario-comment-nav`)**: minimum 2 posts; first is **PUBLIC**, second uses `--visibility` (default `FOLLOWERS`), additional are PUBLIC.
+
+Examples:
+- `npm --prefix backend run dev:generate -- create-milestones --actor alex --project-id <projectId> --count 3`
+- `npm --prefix backend run dev:generate -- create-tasks --actor alex --project-id <projectId> --milestone-id <milestoneId> --count 5`
+- `npm --prefix backend run dev:generate -- create-comments --actor jamie --post-author alex --count 2`
+- `npm --prefix backend run dev:generate:batch -- --preset comment-nav --post-author alex --commenter jamie --count 2`
+- `npm --prefix backend run dev:generate:batch -- --preset all --actor alex --count 2`
+- `npm --prefix backend run dev:generate:batch -- --preset core --count 2` (runs for alex, jamie, taylor)
+- `npm --prefix backend run dev:generate:batch -- --preset comment-nav --count 2` (creates scenarios for each user viewpoint)
+
+Batch presets:
+- `core` → clubs + projects + milestones + tasks
+- `comment-nav` → notification comment-nav scenario
+- `all` → core + comment-nav
+
+Batch user-scoping behavior:
+- By default, batch runs each preset command for all users in `alex,jamie,taylor`.
+- Override users list: `--users alex,jamie,taylor`
+- Force single-user mode: pass `--single-user` with explicit `--actor` and/or `--post-author`/`--commenter`.
+
+If you see `[dev-generate] Cannot reach local API...` or `[dev-generate] fetch failed`:
+1. Start backend first: `npm --prefix backend run local-api`
+2. Re-run your generate command
+3. Or point scripts to another backend URL with `SOCIALAPP_LOCAL_API_URL`
 
 Notes:
 - These endpoints are local/dev only (disabled when `NODE_ENV=production`).

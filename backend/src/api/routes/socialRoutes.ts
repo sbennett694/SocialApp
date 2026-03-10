@@ -8,6 +8,8 @@ import {
   ClubEvent,
   ClubEventStatus,
   ClubEventVisibility,
+  ClubJoinPolicy,
+  ClubJoinRequest,
   ClubMember,
   Comment,
   CloseCircleInvite,
@@ -38,10 +40,12 @@ import {
   assertClubHasExactlyOneOwner,
   assertFounderImmutable,
   canManageClub,
+  canViewProject,
   getClubMembershipRole,
   canManageProject,
   getProjectMilestonesOrdered,
   publishActivityPost,
+  resolveProjectVisibility,
   relationKey
   ,transferClubOwnershipAtomic
 } from "../../services/socialService";
@@ -83,6 +87,7 @@ const {
   closeCircleInvites,
   clubMembers,
   clubs,
+  clubJoinRequests,
   clubEvents,
   projects,
   projectClubLinks,
@@ -126,6 +131,14 @@ function encodeFeedCursor(cursor: FeedCursor | undefined): string | undefined {
 
 const allowedClubEventVisibility: ClubEventVisibility[] = ["CLUB_MEMBERS", "PUBLIC_CLUB"];
 const allowedClubEventStatuses: ClubEventStatus[] = ["SCHEDULED", "CANCELLED"];
+const allowedClubJoinPolicies: ClubJoinPolicy[] = ["OPEN", "REQUEST_REQUIRED", "INVITE_ONLY"];
+
+function resolveClubJoinPolicy(club: Club): ClubJoinPolicy {
+  if (club.joinPolicy && allowedClubJoinPolicies.includes(club.joinPolicy)) {
+    return club.joinPolicy;
+  }
+  return club.isPublic ? "OPEN" : "REQUEST_REQUIRED";
+}
 
 function parseIsoDate(rawValue: unknown): string | null {
   if (typeof rawValue !== "string" || !rawValue.trim()) return null;
@@ -280,20 +293,18 @@ function isViewerProjectScoped(viewerId: string, projectId?: string): boolean {
   if (!projectId) return false;
   const project = projects.find((entry) => entry.id === projectId);
   if (!project) return false;
+  return canViewProject(project, viewerId);
+}
 
-  if (project.ownerId === viewerId || project.createdBy === viewerId) {
-    return true;
-  }
+function projectFeedVisibility(project: Project): Visibility {
+  return project.visibility === "PUBLIC" ? "PUBLIC" : "PROJECT";
+}
 
-  const memberClubIds = new Set(clubMembers.filter((member) => member.userId === viewerId).map((member) => member.clubId));
-
-  if (project.clubId && memberClubIds.has(project.clubId)) {
-    return true;
-  }
-
-  return projectClubLinks.some(
-    (link) => link.projectId === projectId && link.status === "APPROVED" && memberClubIds.has(link.clubId)
-  );
+function ensureProjectReadable(projectId: string, viewerId: string): Project | null {
+  const project = projects.find((entry) => entry.id === projectId);
+  if (!project) return null;
+  if (!canViewProject(project, viewerId)) return null;
+  return project;
 }
 
 router.get("/health", (_req, res) => {
@@ -746,6 +757,7 @@ router.get("/notifications", (req, res) => {
     relatedType: "POST" | "PROJECT" | "CLUB";
     relatedId: string;
     entityId?: string;
+    threadType?: ThreadType;
     postId?: string;
     projectId?: string;
     clubId?: string;
@@ -762,6 +774,8 @@ router.get("/notifications", (req, res) => {
         message: `@${comment.authorId} commented on your post`,
         relatedType: "POST",
         relatedId: comment.postId,
+        entityId: comment.id,
+        threadType: comment.threadType,
         postId: comment.postId,
         createdAt: comment.createdAt
       });
@@ -937,7 +951,12 @@ router.get("/clubs", (_req, res) => {
     return true;
   });
 
-  res.json(filtered);
+  res.json(
+    filtered.map((club) => ({
+      ...club,
+      joinPolicy: resolveClubJoinPolicy(club)
+    }))
+  );
 });
 
 router.post("/clubs", (req, res) => {
@@ -946,6 +965,7 @@ router.post("/clubs", (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   const description = req.body?.description ? String(req.body.description) : undefined;
   const isPublic = req.body?.isPublic !== false;
+  const requestedJoinPolicy = req.body?.joinPolicy ? String(req.body.joinPolicy).toUpperCase() as ClubJoinPolicy : undefined;
 
   if (!ownerId || !categoryId || !name) {
     return res.status(400).json({ message: "ownerId, categoryId, and name are required." });
@@ -968,6 +988,11 @@ router.post("/clubs", (req, res) => {
     founderId: ownerId,
     ownerId,
     isPublic,
+    joinPolicy: requestedJoinPolicy && allowedClubJoinPolicies.includes(requestedJoinPolicy)
+      ? requestedJoinPolicy
+      : isPublic
+        ? "OPEN"
+        : "REQUEST_REQUIRED",
     description,
     createdAt: new Date().toISOString()
   };
@@ -1035,14 +1060,16 @@ router.patch("/clubs/:clubId", (req, res) => {
   const name = req.body?.name ? String(req.body.name).trim() : undefined;
   const description = req.body?.description !== undefined ? String(req.body.description) : undefined;
   const isPublic = req.body?.isPublic;
+  const requestedJoinPolicy = req.body?.joinPolicy ? String(req.body.joinPolicy).toUpperCase() as ClubJoinPolicy : undefined;
 
   const club = clubs.find((entry) => entry.id === clubId);
   if (!club) {
     return res.status(404).json({ message: "Club not found." });
   }
 
-  if (!viewerId || club.ownerId !== viewerId) {
-    return res.status(403).json({ message: "Only the club owner can modify club information." });
+  const viewerRole = getClubMembershipRole(clubId, viewerId);
+  if (!viewerId || (viewerRole !== "OWNER" && viewerRole !== "MODERATOR")) {
+    return res.status(403).json({ message: "Only club owner/admin can modify club information." });
   }
 
   const proposedFounderId = req.body?.founderId !== undefined ? String(req.body.founderId) : undefined;
@@ -1070,7 +1097,19 @@ router.patch("/clubs/:clubId", (req, res) => {
     club.isPublic = isPublic;
   }
 
-  return res.json(club);
+  if (requestedJoinPolicy !== undefined) {
+    if (!allowedClubJoinPolicies.includes(requestedJoinPolicy)) {
+      return res.status(400).json({ message: "joinPolicy must be OPEN, REQUEST_REQUIRED, or INVITE_ONLY." });
+    }
+    club.joinPolicy = requestedJoinPolicy;
+  } else {
+    club.joinPolicy = resolveClubJoinPolicy(club);
+  }
+
+  return res.json({
+    ...club,
+    joinPolicy: resolveClubJoinPolicy(club)
+  });
 });
 
 router.post("/clubs/:clubId/join", (req, res) => {
@@ -1086,17 +1125,12 @@ router.post("/clubs/:clubId/join", (req, res) => {
     return res.status(404).json({ message: "Club not found." });
   }
 
-  if (!club.isPublic) {
-    const isCloseCircleWithOwner = closeCircleInvites.some(
-      (invite) =>
-        invite.status === "ACCEPTED" &&
-        ((invite.inviterId === userId && invite.inviteeId === club.ownerId) ||
-          (invite.inviterId === club.ownerId && invite.inviteeId === userId))
-    );
-
-    if (!isCloseCircleWithOwner && club.ownerId !== userId) {
-      return res.status(403).json({ message: "This club is private. Only owner close-circle members can join." });
+  const joinPolicy = resolveClubJoinPolicy(club);
+  if (joinPolicy !== "OPEN") {
+    if (joinPolicy === "REQUEST_REQUIRED") {
+      return res.status(409).json({ message: "This club requires a join request." });
     }
+    return res.status(403).json({ message: "This club is invite-only." });
   }
 
   const existing = clubMembers.find((m) => m.clubId === clubId && m.userId === userId);
@@ -1109,7 +1143,124 @@ router.post("/clubs/:clubId/join", (req, res) => {
     });
   }
 
+  const requestIndex = clubJoinRequests.findIndex((request) => request.clubId === clubId && request.userId === userId);
+  if (requestIndex >= 0) {
+    clubJoinRequests.splice(requestIndex, 1);
+  }
+
   return res.status(201).json({ ok: true });
+});
+
+router.get("/clubs/:clubId/join-request-status", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const userId = String(req.query.userId ?? "");
+
+  if (!userId) {
+    return res.status(400).json({ message: "userId is required." });
+  }
+
+  const request = clubJoinRequests.find((entry) => entry.clubId === clubId && entry.userId === userId);
+  return res.json(request ?? null);
+});
+
+router.post("/clubs/:clubId/join-request", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const userId = String(req.body?.userId ?? "");
+
+  if (!clubId || !userId) {
+    return res.status(400).json({ message: "clubId and userId are required." });
+  }
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  const joinPolicy = resolveClubJoinPolicy(club);
+  if (joinPolicy === "OPEN") {
+    return res.status(409).json({ message: "This club is open. Join directly instead of requesting." });
+  }
+  if (joinPolicy === "INVITE_ONLY") {
+    return res.status(403).json({ message: "This club is invite-only." });
+  }
+
+  const existingMember = clubMembers.find((member) => member.clubId === clubId && member.userId === userId);
+  if (existingMember) {
+    return res.status(409).json({ message: "You are already a club member." });
+  }
+
+  const existingRequest = clubJoinRequests.find((request) => request.clubId === clubId && request.userId === userId);
+  if (existingRequest) {
+    if (existingRequest.status === "REJECTED") {
+      existingRequest.status = "PENDING";
+      existingRequest.createdAt = new Date().toISOString();
+      existingRequest.resolvedAt = undefined;
+      existingRequest.resolvedBy = undefined;
+    }
+    return res.status(201).json(existingRequest);
+  }
+
+  const joinRequest: ClubJoinRequest = {
+    clubId,
+    userId,
+    status: "PENDING",
+    createdAt: new Date().toISOString()
+  };
+  clubJoinRequests.push(joinRequest);
+  return res.status(201).json(joinRequest);
+});
+
+router.get("/clubs/:clubId/join-requests", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const actorId = String(req.query.actorId ?? "");
+
+  if (!actorId || !canManageClub(clubId, actorId)) {
+    return res.status(403).json({ message: "Only club owner/admin can view join requests." });
+  }
+
+  const pending = clubJoinRequests
+    .filter((request) => request.clubId === clubId && request.status === "PENDING")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return res.json(pending);
+});
+
+router.patch("/clubs/:clubId/join-requests/:userId", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const userId = String(req.params.userId);
+  const actorId = String(req.body?.actorId ?? "");
+  const status = String(req.body?.status ?? "").toUpperCase() as ClubJoinRequest["status"];
+
+  if (!actorId || !canManageClub(clubId, actorId)) {
+    return res.status(403).json({ message: "Only club owner/admin can review join requests." });
+  }
+
+  if (status !== "APPROVED" && status !== "REJECTED") {
+    return res.status(400).json({ message: "status must be APPROVED or REJECTED." });
+  }
+
+  const request = clubJoinRequests.find((entry) => entry.clubId === clubId && entry.userId === userId);
+  if (!request) {
+    return res.status(404).json({ message: "Join request not found." });
+  }
+
+  request.status = status;
+  request.resolvedAt = new Date().toISOString();
+  request.resolvedBy = actorId;
+
+  if (status === "APPROVED") {
+    const existingMember = clubMembers.find((member) => member.clubId === clubId && member.userId === userId);
+    if (!existingMember) {
+      clubMembers.push({
+        clubId,
+        userId,
+        role: "MEMBER",
+        createdAt: new Date().toISOString()
+      });
+    }
+  }
+
+  return res.json(request);
 });
 
 router.patch("/clubs/:clubId/members/:memberId/role", (req, res) => {
@@ -1506,6 +1657,7 @@ router.post("/projects", (req, res) => {
   const clubId = req.body?.clubId ? String(req.body.clubId) : undefined;
   const title = String(req.body?.title ?? "");
   const description = String(req.body?.description ?? "");
+  const requestedVisibility = req.body?.visibility ? String(req.body.visibility) : undefined;
 
   if (!ownerId || !categoryId || !title.trim()) {
     return res.status(400).json({ message: "ownerId, categoryId, and title are required." });
@@ -1527,6 +1679,17 @@ router.post("/projects", (req, res) => {
     return res.status(400).json({ message: "categoryId must be from allowed categories." });
   }
 
+  let visibility: Project["visibility"];
+  try {
+    visibility = resolveProjectVisibility({
+      requestedVisibility,
+      clubId,
+      actorId: createdBy
+    });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid project visibility." });
+  }
+
   const project: Project = {
     id: uuidv4(),
     ownerId,
@@ -1534,6 +1697,7 @@ router.post("/projects", (req, res) => {
     title: title.trim(),
     description,
     clubId,
+    visibility,
     createdBy,
     createdAt: new Date().toISOString()
   };
@@ -1574,7 +1738,7 @@ router.post("/projects", (req, res) => {
       actorId: createdBy,
       projectId: project.id,
       clubId: project.clubId,
-      visibility: "PUBLIC"
+      visibility: projectFeedVisibility(project)
     });
   });
 
@@ -1585,9 +1749,9 @@ router.get("/projects/:projectId/clubs", (req, res) => {
   const projectId = String(req.params.projectId);
   const viewerId = req.query.viewerId ? String(req.query.viewerId) : "";
 
-  const project = projects.find((entry) => entry.id === projectId);
+  const project = viewerId ? ensureProjectReadable(projectId, viewerId) : projects.find((entry) => entry.id === projectId);
   if (!project) {
-    return res.status(404).json({ message: "Project not found." });
+    return res.status(404).json({ message: viewerId ? "Project not found or not visible." : "Project not found." });
   }
 
   const links = projectClubLinks
@@ -1785,11 +1949,13 @@ router.get("/projects", (req, res) => {
   const ownerId = req.query.ownerId ? String(req.query.ownerId) : undefined;
   const categoryId = req.query.categoryId ? String(req.query.categoryId) : undefined;
   const clubId = req.query.clubId ? String(req.query.clubId) : undefined;
+  const viewerId = req.query.viewerId ? String(req.query.viewerId) : undefined;
 
   const filtered = projects.filter((p) => {
     if (ownerId && p.ownerId !== ownerId) return false;
     if (categoryId && p.categoryId !== categoryId) return false;
     if (clubId && p.clubId !== clubId) return false;
+    if (viewerId && !canViewProject(p, viewerId)) return false;
     return true;
   });
 
@@ -1924,6 +2090,10 @@ router.post("/posts", (req, res) => {
 
 router.get("/projects/:projectId/highlights", (req, res) => {
   const projectId = String(req.params.projectId);
+  const viewerId = req.query.viewerId ? String(req.query.viewerId) : "";
+  if (viewerId && !ensureProjectReadable(projectId, viewerId)) {
+    return res.status(404).json({ message: "Project not found or not visible." });
+  }
   res.json(projectHighlights.filter((item) => item.projectId === projectId));
 });
 
@@ -1969,7 +2139,7 @@ router.post("/projects/:projectId/highlights", (req, res) => {
       actorId: authorId,
       projectId,
       clubId: project.clubId,
-      visibility: "PUBLIC"
+      visibility: projectFeedVisibility(project)
     });
   });
 
@@ -1980,7 +2150,7 @@ router.post("/projects/:projectId/highlights", (req, res) => {
   publishActivityPost({
     userId: authorId,
     text: `${highlightPrefix}\n${text}`,
-    visibility: "PUBLIC",
+    visibility: projectFeedVisibility(project),
     projectId,
     clubId: project.clubId,
     postedAsClub: !!project.clubId,
@@ -1993,6 +2163,10 @@ router.post("/projects/:projectId/highlights", (req, res) => {
 
 router.get("/projects/:projectId/milestones", (req, res) => {
   const projectId = String(req.params.projectId);
+  const viewerId = req.query.viewerId ? String(req.query.viewerId) : "";
+  if (viewerId && !ensureProjectReadable(projectId, viewerId)) {
+    return res.status(404).json({ message: "Project not found or not visible." });
+  }
   res.json(getProjectMilestonesOrdered(projectId));
 });
 
@@ -2046,7 +2220,7 @@ router.post("/projects/:projectId/milestones", (req, res) => {
   publishActivityPost({
     userId: actorId,
     text: `@${actorId} created project milestone on ${project.title}!`,
-    visibility: "PUBLIC",
+    visibility: projectFeedVisibility(project),
     projectId,
     clubId: project.clubId,
     tags: ["PROGRESS"]
@@ -2121,7 +2295,7 @@ router.patch("/projects/:projectId/milestones/:milestoneId", (req, res) => {
           actorId,
           projectId,
           clubId: project.clubId,
-          visibility: "PUBLIC"
+          visibility: projectFeedVisibility(project)
         });
       });
     }
@@ -2201,7 +2375,7 @@ router.post("/projects/:projectId/milestones/:milestoneId/tasks", (req, res) => 
   publishActivityPost({
     userId: actorId,
     text: `@${actorId} created tasks for ${milestone.title} on ${project.title}!`,
-    visibility: "PUBLIC",
+    visibility: projectFeedVisibility(project),
     projectId,
     clubId: project.clubId,
     tags: ["PROGRESS"]
@@ -2293,7 +2467,7 @@ router.patch("/projects/:projectId/milestones/:milestoneId/tasks/:taskId", (req,
         actorId,
         projectId,
         clubId: project.clubId,
-        visibility: "PUBLIC"
+        visibility: projectFeedVisibility(project)
       });
     });
   }

@@ -1,7 +1,14 @@
 import { config } from "../config";
 
 export type Visibility = "PUBLIC" | "FOLLOWERS" | "CLOSE_CIRCLE" | "CLUB" | "PROJECT";
+export type ProjectVisibility =
+  | "PUBLIC"
+  | "PRIVATE"
+  | "CLUB_MEMBERS"
+  | "CLUB_MODERATORS"
+  | "CLUB_OWNER_ONLY";
 export type ThreadType = "COMMENTS" | "QUESTIONS" | "THANK_YOU" | "SUGGESTIONS";
+export type ClubJoinPolicy = "OPEN" | "REQUEST_REQUIRED" | "INVITE_ONLY";
 
 export type Category = {
   id: string;
@@ -27,7 +34,17 @@ export type Club = {
   name: string;
   ownerId?: string;
   isPublic?: boolean;
+  joinPolicy?: ClubJoinPolicy;
   description?: string;
+};
+
+export type ClubJoinRequest = {
+  clubId: string;
+  userId: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
 };
 
 export type ClubHighlight = {
@@ -42,6 +59,7 @@ export type Project = {
   title: string;
   description?: string;
   clubId?: string;
+  visibility: ProjectVisibility;
   createdBy?: string;
   createdAt: string;
 };
@@ -152,6 +170,7 @@ export type NotificationItem = {
   relatedType: "POST" | "PROJECT" | "CLUB";
   relatedId: string;
   entityId?: string;
+  threadType?: ThreadType;
   postId?: string;
   projectId?: string;
   clubId?: string;
@@ -679,6 +698,7 @@ export async function createClub(input: {
   name: string;
   description?: string;
   isPublic?: boolean;
+  joinPolicy?: ClubJoinPolicy;
 }): Promise<Club> {
   const response = await apiFetch(`/clubs`, {
     method: "POST",
@@ -698,6 +718,7 @@ export async function updateClub(input: {
   name?: string;
   description?: string;
   isPublic?: boolean;
+  joinPolicy?: ClubJoinPolicy;
 }): Promise<Club> {
   const response = await apiFetch(`/clubs/${encodeURIComponent(input.clubId)}`, {
     method: "PATCH",
@@ -706,7 +727,8 @@ export async function updateClub(input: {
       viewerId: input.viewerId,
       name: input.name,
       description: input.description,
-      isPublic: input.isPublic
+      isPublic: input.isPublic,
+      joinPolicy: input.joinPolicy
     })
   });
 
@@ -741,6 +763,58 @@ export async function joinClub(clubId: string, userId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Join club failed: ${response.status}`);
   }
+}
+
+export async function getClubJoinRequestStatus(clubId: string, userId: string): Promise<ClubJoinRequest | null> {
+  const response = await apiFetch(
+    `/clubs/${encodeURIComponent(clubId)}/join-request-status?userId=${encodeURIComponent(userId)}`
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Club join request status failed");
+  }
+  return response.json();
+}
+
+export async function createClubJoinRequest(clubId: string, userId: string): Promise<ClubJoinRequest> {
+  const response = await apiFetch(`/clubs/${encodeURIComponent(clubId)}/join-request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId })
+  });
+  if (!response.ok) {
+    throw await extractApiError(response, "Create club join request failed");
+  }
+  return response.json();
+}
+
+export async function getClubJoinRequests(clubId: string, actorId: string): Promise<ClubJoinRequest[]> {
+  const response = await apiFetch(
+    `/clubs/${encodeURIComponent(clubId)}/join-requests?actorId=${encodeURIComponent(actorId)}`
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Club join requests load failed");
+  }
+  return response.json();
+}
+
+export async function reviewClubJoinRequest(input: {
+  clubId: string;
+  userId: string;
+  actorId: string;
+  status: "APPROVED" | "REJECTED";
+}): Promise<ClubJoinRequest> {
+  const response = await apiFetch(
+    `/clubs/${encodeURIComponent(input.clubId)}/join-requests/${encodeURIComponent(input.userId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actorId: input.actorId, status: input.status })
+    }
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Club join request review failed");
+  }
+  return response.json();
 }
 
 export async function getClubMembers(clubId: string): Promise<ClubMember[]> {
@@ -857,6 +931,7 @@ export async function createProject(input: {
   title: string;
   description?: string;
   clubId?: string;
+  visibility?: ProjectVisibility;
 }): Promise<Project> {
   const response = await apiFetch(`/projects`, {
     method: "POST",

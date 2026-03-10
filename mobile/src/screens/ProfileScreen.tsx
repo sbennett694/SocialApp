@@ -31,12 +31,33 @@ type ProfileScreenProps = {
   onNavigateToDetail?: (target: "COMMONS" | "CLUBS" | "PROJECTS", id?: string) => void;
 };
 
+function formatClubVisibilityLabel(isPublic: boolean | undefined): string {
+  return isPublic === false ? "Private Club" : "Public Club";
+}
+
+function formatProjectVisibilityLabel(visibility: string): string {
+  switch (visibility) {
+    case "PUBLIC":
+      return "Public";
+    case "PRIVATE":
+      return "Private";
+    case "CLUB_MEMBERS":
+      return "Club Members";
+    case "CLUB_MODERATORS":
+      return "Club Moderators";
+    case "CLUB_OWNER_ONLY":
+      return "Club Owner Only";
+    default:
+      return "Unknown";
+  }
+}
+
 export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: ProfileScreenProps) {
   const [selectedProfileUserId, setSelectedProfileUserId] = useState(user.userId);
   const [profile, setProfile] = useState<UserProfileSummary | null>(null);
   const [commonsPosts, setCommonsPosts] = useState<Post[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [clubs, setClubs] = useState<{ id: string; name: string }[]>([]);
+  const [clubs, setClubs] = useState<{ id: string; name: string; isPublic?: boolean }[]>([]);
 
   const [followers, setFollowers] = useState<any[]>([]);
   const [following, setFollowing] = useState<any[]>([]);
@@ -175,13 +196,15 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
         id: `project-${project.id}`,
         section: "Project" as const,
         title: project.title,
-        subtitle: project.description || "No description"
+        subtitle: project.description || "No description",
+        visibility: project.visibility
       })),
       ...clubs.map((club) => ({
         id: `club-${club.id}`,
         section: "Club" as const,
         title: club.name,
-        subtitle: "Member club"
+        subtitle: "Member club",
+        isPublic: club.isPublic
       }))
     ],
     [commonsPosts, projects, clubs]
@@ -246,6 +269,22 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
                   <Text style={styles.sectionBadge}>{item.section}</Text>
                   <Text style={styles.cardTitle}>{item.title}</Text>
                   <Text style={styles.openHint}>Tap to open {item.section.toLowerCase()}</Text>
+                  {item.section === "Project" ? (
+                    <View style={styles.visibilityRow}>
+                      <Text style={styles.hint}>Visibility:</Text>
+                      <View style={styles.visibilityBadge}>
+                        <Text style={styles.visibilityBadgeText}>{formatProjectVisibilityLabel((item as { visibility?: string }).visibility ?? "")}</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                  {item.section === "Club" ? (
+                    <View style={styles.visibilityRow}>
+                      <Text style={styles.hint}>Visibility:</Text>
+                      <View style={styles.visibilityBadge}>
+                        <Text style={styles.visibilityBadgeText}>{formatClubVisibilityLabel((item as { isPublic?: boolean }).isPublic)}</Text>
+                      </View>
+                    </View>
+                  ) : null}
                   <Text style={styles.hint}>{item.subtitle}</Text>
                 </Pressable>
               ))}
@@ -264,6 +303,12 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
             <Pressable key={project.id} style={styles.card} onPress={() => onNavigateToDetail?.("PROJECTS", project.id)}>
               <Text style={styles.cardTitle}>{project.title}</Text>
               <Text style={styles.openHint}>Tap to open project</Text>
+              <View style={styles.visibilityRow}>
+                <Text style={styles.hint}>Visibility:</Text>
+                <View style={styles.visibilityBadge}>
+                  <Text style={styles.visibilityBadgeText}>{formatProjectVisibilityLabel(project.visibility)}</Text>
+                </View>
+              </View>
               <Text>{project.description || "No description"}</Text>
             </Pressable>
           )) : null}
@@ -272,6 +317,12 @@ export function ProfileScreen({ user, users, focusUserId, onNavigateToDetail }: 
             <Pressable key={club.id} style={styles.card} onPress={() => onNavigateToDetail?.("CLUBS", club.id)}>
               <Text style={styles.cardTitle}>{club.name}</Text>
               <Text style={styles.openHint}>Tap to open club</Text>
+              <View style={styles.visibilityRow}>
+                <Text style={styles.hint}>Visibility:</Text>
+                <View style={styles.visibilityBadge}>
+                  <Text style={styles.visibilityBadgeText}>{formatClubVisibilityLabel(club.isPublic)}</Text>
+                </View>
+              </View>
             </Pressable>
           )) : null}
 
@@ -379,6 +430,16 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontWeight: "600", marginBottom: 4 },
   openHint: { color: "#0b57d0", fontSize: 12, fontWeight: "600", marginBottom: 4 },
+  visibilityRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
+  visibilityBadge: {
+    borderWidth: 1,
+    borderColor: "#a8c2ff",
+    backgroundColor: "#eaf1ff",
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: 8
+  },
+  visibilityBadgeText: { fontSize: 11, fontWeight: "700", color: "#1b2a57" },
   sectionTitle: { fontSize: 16, fontWeight: "700", marginTop: 12, marginBottom: 6 },
   actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   actionButton: {

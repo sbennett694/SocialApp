@@ -58,6 +58,23 @@ const UPCOMING_CLUB_EVENTS_LIMIT = 5;
 
 const NEW_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+function formatProjectVisibilityLabel(visibility: string): string {
+  switch (visibility) {
+    case "PUBLIC":
+      return "Public";
+    case "PRIVATE":
+      return "Private";
+    case "CLUB_MEMBERS":
+      return "Club Members";
+    case "CLUB_MODERATORS":
+      return "Club Moderators";
+    case "CLUB_OWNER_ONLY":
+      return "Club Owner Only";
+    default:
+      return "Unknown";
+  }
+}
+
 function firstOpenMilestone(milestones: ProjectMilestone[]): ProjectMilestone | undefined {
   const ordered = [...milestones].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt));
   return ordered.find((item) => item.status !== "DONE") ?? ordered[ordered.length - 1];
@@ -247,6 +264,12 @@ export function HomeScreen({
               <Pressable key={item.project.id} onPress={() => onNavigate("PROJECTS", { projectId: item.project.id })} style={styles.itemCard}>
                 <Text style={styles.itemTitle}>{item.project.title}</Text>
                 <Text style={styles.openHint}>Tap to open project</Text>
+                <View style={styles.visibilityRow}>
+                  <Text style={styles.itemMeta}>Visibility:</Text>
+                  <View style={styles.visibilityBadge}>
+                    <Text style={styles.visibilityBadgeText}>{formatProjectVisibilityLabel(item.project.visibility)}</Text>
+                  </View>
+                </View>
                 {item.activeMilestoneTitle ? <Text style={styles.itemMeta}>Active milestone: {item.activeMilestoneTitle}</Text> : null}
                 {item.taskProgressHint ? <Text style={styles.itemMeta}>Tasks: {item.taskProgressHint}</Text> : null}
                 {item.recentUpdateAt ? (
@@ -525,5 +548,24 @@ const styles = StyleSheet.create({
   itemMeta: {
     color: "#666",
     fontSize: 12
+  },
+  visibilityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4
+  },
+  visibilityBadge: {
+    borderWidth: 1,
+    borderColor: "#a8c2ff",
+    backgroundColor: "#eaf1ff",
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: 8
+  },
+  visibilityBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1b2a57"
   }
 });

@@ -7,6 +7,7 @@ import {
   searchGlobal,
   GlobalSearchResult,
   NotificationItem,
+  ThreadType,
   UserBasic
 } from "./src/api/client";
 import { getCurrentUser, getMockUsers } from "./src/auth/session";
@@ -37,6 +38,9 @@ export default function App() {
   const [projectsFocusItemId, setProjectsFocusItemId] = useState<string | undefined>(undefined);
   const [projectsFocusItemType, setProjectsFocusItemType] = useState<Extract<FocusItemType, "MILESTONE" | "TASK"> | undefined>(undefined);
   const [commonsFocusPostId, setCommonsFocusPostId] = useState<string | undefined>(undefined);
+  const [commonsFocusCommentId, setCommonsFocusCommentId] = useState<string | undefined>(undefined);
+  const [commonsFocusThreadType, setCommonsFocusThreadType] = useState<ThreadType | undefined>(undefined);
+  const [commonsCommentNavigationPending, setCommonsCommentNavigationPending] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSuggestions, setSearchSuggestions] = useState<GlobalSearchResult>({ users: [], clubs: [], projects: [] });
@@ -149,13 +153,22 @@ export default function App() {
     if (item.relatedType === "PROJECT") {
       setProjectsFocusProjectId(item.projectId ?? item.relatedId);
       if (item.type === "PROJECT_MILESTONE_COMPLETED" || item.type === "PROJECT_TASK_COMPLETED") {
-        setProjectsFocusItemId(item.entityId ?? item.relatedId);
+        setProjectsFocusItemId(item.entityId);
         setProjectsFocusItemType(item.type === "PROJECT_MILESTONE_COMPLETED" ? "MILESTONE" : "TASK");
       } else {
         setProjectsFocusItemId(undefined);
         setProjectsFocusItemType(undefined);
       }
       setActiveTab("PROJECTS");
+      return;
+    }
+
+    if (item.type === "POST_COMMENTED" && item.relatedType === "POST") {
+      setCommonsFocusPostId(item.postId ?? item.relatedId);
+      setCommonsFocusCommentId(item.entityId);
+      setCommonsFocusThreadType(item.threadType ?? "COMMENTS");
+      setCommonsCommentNavigationPending(true);
+      setActiveTab("COMMONS");
       return;
     }
 
@@ -175,6 +188,9 @@ export default function App() {
 
     if (item.relatedType === "POST") {
       setCommonsFocusPostId(item.postId ?? item.relatedId);
+      setCommonsFocusCommentId(undefined);
+      setCommonsFocusThreadType(undefined);
+      setCommonsCommentNavigationPending(false);
     }
     setActiveTab("COMMONS");
   }
@@ -186,6 +202,9 @@ export default function App() {
   function handleOpenDetailTarget(target: DetailNavigationTarget, id?: string) {
     if (target === "COMMONS") {
       setCommonsFocusPostId(id);
+      setCommonsFocusCommentId(undefined);
+      setCommonsFocusThreadType(undefined);
+      setCommonsCommentNavigationPending(false);
       setActiveTab("COMMONS");
       return;
     }
@@ -222,6 +241,9 @@ export default function App() {
   ) {
     if (target === "COMMONS") {
       setCommonsFocusPostId(options?.postId);
+      setCommonsFocusCommentId(undefined);
+      setCommonsFocusThreadType(undefined);
+      setCommonsCommentNavigationPending(false);
       setActiveTab("COMMONS");
       return;
     }
@@ -464,8 +486,20 @@ export default function App() {
         <FeedScreen
           user={user}
           focusPostId={commonsFocusPostId}
+          focusCommentId={commonsFocusCommentId}
+          focusThreadType={commonsFocusThreadType}
+          focusFromCommentNotification={commonsCommentNavigationPending}
           onFocusPostConsumed={(postId) => {
             setCommonsFocusPostId((current) => (current === postId ? undefined : current));
+          }}
+          onFocusCommentConsumed={(commentId) => {
+            setCommonsFocusCommentId((current) => (current === commentId ? undefined : current));
+          }}
+          onFocusThreadConsumed={(threadType) => {
+            setCommonsFocusThreadType((current) => (current === threadType ? undefined : current));
+          }}
+          onCommentNavigationConsumed={() => {
+            setCommonsCommentNavigationPending(false);
           }}
           onNavigate={(target, options) => {
             if (target === "PROJECTS") {
