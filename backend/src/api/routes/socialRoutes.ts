@@ -745,6 +745,7 @@ router.get("/notifications", (req, res) => {
     message: string;
     relatedType: "POST" | "PROJECT" | "CLUB";
     relatedId: string;
+    entityId?: string;
     postId?: string;
     projectId?: string;
     clubId?: string;
@@ -803,6 +804,7 @@ router.get("/notifications", (req, res) => {
             : `@${event.actorId} completed a task in ${projectTitle}`,
         relatedType: "PROJECT",
         relatedId: event.projectId ?? event.entityId,
+        entityId: event.entityId,
         projectId: event.projectId,
         clubId: event.clubId,
         createdAt: event.sortTimestamp

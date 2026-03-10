@@ -149,7 +149,7 @@ export default function App() {
     if (item.relatedType === "PROJECT") {
       setProjectsFocusProjectId(item.projectId ?? item.relatedId);
       if (item.type === "PROJECT_MILESTONE_COMPLETED" || item.type === "PROJECT_TASK_COMPLETED") {
-        setProjectsFocusItemId(item.relatedId);
+        setProjectsFocusItemId(item.entityId ?? item.relatedId);
         setProjectsFocusItemType(item.type === "PROJECT_MILESTONE_COMPLETED" ? "MILESTONE" : "TASK");
       } else {
         setProjectsFocusItemId(undefined);

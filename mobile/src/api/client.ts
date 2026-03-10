@@ -151,6 +151,7 @@ export type NotificationItem = {
   message: string;
   relatedType: "POST" | "PROJECT" | "CLUB";
   relatedId: string;
+  entityId?: string;
   postId?: string;
   projectId?: string;
   clubId?: string;

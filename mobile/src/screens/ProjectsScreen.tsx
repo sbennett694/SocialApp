@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import DateTimePicker, { DateTimePickerAndroid, DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import {
@@ -75,6 +75,7 @@ export function ProjectsScreen({
     triggerHighlight: triggerNestedItemHighlight,
     emphasisAnimatedStyle: nestedItemEmphasisAnimatedStyle
   } = useTemporaryHighlight(1800);
+  const milestonesListRef = useRef<FlatList<ProjectMilestone> | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [allClubs, setAllClubs] = useState<Club[]>([]);
@@ -206,6 +207,16 @@ export function ProjectsScreen({
 
     const key = `${pendingFocusItem.type}:${pendingFocusItem.id}`;
     triggerNestedItemHighlight(key);
+
+    const scrollIndex =
+      pendingFocusItem.type === "MILESTONE"
+        ? orderedMilestones.findIndex((m) => m.id === pendingFocusItem.id)
+        : orderedMilestones.findIndex((m) => m.tasks.some((t) => t.id === pendingFocusItem.id));
+
+    if (scrollIndex >= 0) {
+      milestonesListRef.current?.scrollToIndex({ index: scrollIndex, animated: true, viewPosition: 0.2 });
+    }
+
     onFocusItemConsumed?.(pendingFocusItem.id, pendingFocusItem.type);
     setPendingFocusItem(null);
   }, [
@@ -1086,9 +1097,13 @@ export function ProjectsScreen({
     return (
       <>
         <FlatList
+          ref={milestonesListRef}
           data={orderedMilestones}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
+          onScrollToIndexFailed={() => {
+            milestonesListRef.current?.scrollToEnd({ animated: true });
+          }}
           ListHeaderComponent={
             <View>
               {detailHeader}
