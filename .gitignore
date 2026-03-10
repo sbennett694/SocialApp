@@ -43,3 +43,15 @@ Thumbs.db
 
 # ===== Local tool state =====
 .cline/
+
+# Claude Code workspace
+.claude/
+
+# Claude worktrees
+.claude/worktrees/
+
+# Dev runtime state
+scripts/.devstate/*.pid
+
+.claude/
+scripts/.devstate/*.pid

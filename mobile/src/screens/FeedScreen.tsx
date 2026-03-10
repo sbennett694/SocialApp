@@ -139,7 +139,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
   const [commentText, setCommentText] = useState("");
   const [commentMessage, setCommentMessage] = useState<string | null>(null);
   const [pendingFocusPostId, setPendingFocusPostId] = useState<string | null>(null);
-  const { highlightedId: highlightedPostId, triggerHighlight, emphasisAnimatedStyle } = useTemporaryHighlight(1800);
+  const { highlightedId: highlightedPostId, triggerHighlight, emphasisAnimatedStyle, glowAnimatedStyle } = useTemporaryHighlight();
 
   const [postById, setPostById] = useState<Record<string, Post>>({});
   const [clubById, setClubById] = useState<Record<string, Club>>({});
@@ -394,7 +394,9 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
 
     if (focusedIndex < 0) return;
 
-    feedListRef.current?.scrollToIndex({ index: focusedIndex, animated: true, viewPosition: 0.2 });
+    setTimeout(() => {
+      feedListRef.current?.scrollToIndex({ index: focusedIndex, animated: true, viewPosition: 0.3 });
+    }, 150);
     triggerHighlight(pendingFocusPostId);
     setPendingFocusPostId(null);
   }, [displayItems, pendingFocusPostId]);
@@ -686,7 +688,7 @@ export function FeedScreen({ user, focusPostId, onFocusPostConsumed, onNavigate 
         const isFocused = !!postId && highlightedPostId === postId;
         const interactionPreview = postId ? interactionPreviewByPostId[postId] : undefined;
         return (
-          <Animated.View style={[isFocused ? styles.focusedFeedItem : undefined, isFocused ? emphasisAnimatedStyle : undefined]}>
+          <Animated.View style={[isFocused ? styles.focusedFeedItem : undefined, isFocused ? emphasisAnimatedStyle : undefined, isFocused ? glowAnimatedStyle : undefined]}>
             <Pressable onPress={() => void handlePressFeedTile(item)}>{getEventCard(event)}</Pressable>
 
             {postId ? (

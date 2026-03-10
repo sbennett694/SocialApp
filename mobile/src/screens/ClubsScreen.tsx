@@ -67,8 +67,9 @@ export function ClubsScreen({
   const {
     highlightedId: highlightedClubPostId,
     triggerHighlight: triggerClubPostHighlight,
-    emphasisAnimatedStyle: clubPostEmphasisAnimatedStyle
-  } = useTemporaryHighlight(1800);
+    emphasisAnimatedStyle: clubPostEmphasisAnimatedStyle,
+    glowAnimatedStyle: clubPostGlowAnimatedStyle
+  } = useTemporaryHighlight();
   const [clubsPageTab, setClubsPageTab] = useState<"MY_CLUBS" | "DISCOVER" | "CLUB_FEED">("MY_CLUBS");
   const [clubs, setClubs] = useState<Club[]>([]);
   const [myClubs, setMyClubs] = useState<Club[]>([]);
@@ -192,7 +193,9 @@ export function ClubsScreen({
       return;
     }
 
-    clubHighlightsListRef.current?.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.3 });
+    setTimeout(() => {
+      clubHighlightsListRef.current?.scrollToIndex({ index: targetIndex, animated: true, viewPosition: 0.3 });
+    }, 150);
     triggerClubPostHighlight(pendingFocusClubPostId);
     onFocusClubPostConsumed?.(pendingFocusClubPostId);
     setPendingFocusClubPostId(null);
@@ -888,7 +891,7 @@ export function ClubsScreen({
                   renderItem={({ item: post }) => {
                     const focused = highlightedClubPostId === post.postId;
                     return (
-                      <Animated.View style={[styles.card, focused ? styles.focusedTargetItem : null, focused ? clubPostEmphasisAnimatedStyle : null]}>
+                      <Animated.View style={[styles.card, focused ? styles.focusedTargetItem : null, focused ? clubPostEmphasisAnimatedStyle : null, focused ? clubPostGlowAnimatedStyle : null]}>
                         <Text style={styles.clubName}>
                           {post.postedAsClub ? `@${viewingClub.name} by ${post.clubActorId ?? post.userId}` : `@${post.userId}`}
                         </Text>

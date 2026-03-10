@@ -73,7 +73,8 @@ export function ProjectsScreen({
   const {
     highlightedId: highlightedNestedItemId,
     triggerHighlight: triggerNestedItemHighlight,
-    emphasisAnimatedStyle: nestedItemEmphasisAnimatedStyle
+    emphasisAnimatedStyle: nestedItemEmphasisAnimatedStyle,
+    glowAnimatedStyle: nestedItemGlowAnimatedStyle
   } = useTemporaryHighlight(1800);
   const milestonesListRef = useRef<FlatList<ProjectMilestone> | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -214,7 +215,9 @@ export function ProjectsScreen({
         : orderedMilestones.findIndex((m) => m.tasks.some((t) => t.id === pendingFocusItem.id));
 
     if (scrollIndex >= 0) {
-      milestonesListRef.current?.scrollToIndex({ index: scrollIndex, animated: true, viewPosition: 0.2 });
+      setTimeout(() => {
+        milestonesListRef.current?.scrollToIndex({ index: scrollIndex, animated: true, viewPosition: 0.3 });
+      }, 150);
     }
 
     onFocusItemConsumed?.(pendingFocusItem.id, pendingFocusItem.type);
@@ -1127,7 +1130,8 @@ export function ProjectsScreen({
                   styles.card,
                   cardStyle,
                   highlightedNestedItemId === milestoneFocusKey ? styles.focusedTargetItem : null,
-                  highlightedNestedItemId === milestoneFocusKey ? nestedItemEmphasisAnimatedStyle : null
+                  highlightedNestedItemId === milestoneFocusKey ? nestedItemEmphasisAnimatedStyle : null,
+                  highlightedNestedItemId === milestoneFocusKey ? nestedItemGlowAnimatedStyle : null
                 ]}
               >
                 <Text style={styles.title}>{item.order}. {item.title}</Text>
@@ -1165,7 +1169,8 @@ export function ProjectsScreen({
                       style={[
                         styles.taskItemBlock,
                         highlightedNestedItemId === taskFocusKey ? styles.focusedTargetItem : null,
-                        highlightedNestedItemId === taskFocusKey ? nestedItemEmphasisAnimatedStyle : null
+                        highlightedNestedItemId === taskFocusKey ? nestedItemEmphasisAnimatedStyle : null,
+                        highlightedNestedItemId === taskFocusKey ? nestedItemGlowAnimatedStyle : null
                       ]}
                     >
                       <Pressable onPress={() => toggleMilestoneTask(item.id, task)} style={styles.taskRow}>
@@ -1335,8 +1340,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f6f9ff"
   },
   focusedTargetItem: {
-    borderColor: "#9bb8f5",
-    borderWidth: 1,
-    backgroundColor: "#f6f9ff"
+    borderColor: "#f59e0b",
+    borderWidth: 2
   }
 });
