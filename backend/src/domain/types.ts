@@ -87,6 +87,8 @@ export type Club = {
   createdAt: string;
   description?: string;
   rules?: string;
+  memberCount?: number;
+  pendingJoinRequestCount?: number;
 };
 
 export type ClubJoinRequest = {

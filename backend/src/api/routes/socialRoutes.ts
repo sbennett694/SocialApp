@@ -137,7 +137,7 @@ function resolveClubJoinPolicy(club: Club): ClubJoinPolicy {
   if (club.joinPolicy && allowedClubJoinPolicies.includes(club.joinPolicy)) {
     return club.joinPolicy;
   }
-  return club.isPublic ? "OPEN" : "REQUEST_REQUIRED";
+  return club.isPublic ? "OPEN" : "INVITE_ONLY";
 }
 
 function parseIsoDate(rawValue: unknown): string | null {
@@ -573,7 +573,25 @@ router.get("/users/:userId/projects", (req, res) => {
 router.get("/users/:userId/clubs", (req, res) => {
   const userId = String(req.params.userId);
   const memberClubIds = new Set(clubMembers.filter((m) => m.userId === userId).map((m) => m.clubId));
-  res.json(clubs.filter((club) => club.ownerId === userId || memberClubIds.has(club.id)));
+
+  const result = clubs
+    .filter((club) => club.ownerId === userId || memberClubIds.has(club.id))
+    .map((club) => {
+      const viewerRole = getClubMembershipRole(club.id, userId);
+      const memberCount = clubMembers.filter((m) => m.clubId === club.id).length;
+      const canViewPending = viewerRole === "OWNER" || viewerRole === "MODERATOR";
+      const pendingJoinRequestCount = canViewPending
+        ? clubJoinRequests.filter((request) => request.clubId === club.id && request.status === "PENDING").length
+        : undefined;
+
+      return {
+        ...club,
+        memberCount,
+        pendingJoinRequestCount
+      };
+    });
+
+  res.json(result);
 });
 
 router.get("/feed/commons", (req, res) => {
@@ -934,6 +952,13 @@ router.get("/clubs", (_req, res) => {
     );
 
   const filtered = clubs.filter((club) => {
+    const isViewerMember = viewerMemberClubIds.has(club.id);
+    const canViewPrivateClub = club.ownerId === viewerId || isViewerMember;
+
+    if (club.isPublic === false && !canViewPrivateClub) {
+      return false;
+    }
+
     if (search) {
       const categoryName = allowedCategories.find((c) => c.id === club.categoryId)?.name ?? "";
       const searchable = `${club.name} ${categoryName}`.toLowerCase();
@@ -992,7 +1017,7 @@ router.post("/clubs", (req, res) => {
       ? requestedJoinPolicy
       : isPublic
         ? "OPEN"
-        : "REQUEST_REQUIRED",
+        : "INVITE_ONLY",
     description,
     createdAt: new Date().toISOString()
   };

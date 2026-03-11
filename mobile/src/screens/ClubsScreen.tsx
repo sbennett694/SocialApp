@@ -85,7 +85,7 @@ function resolveEffectiveJoinPolicy(club: Club): ClubJoinPolicy {
   if (club.joinPolicy === "OPEN" || club.joinPolicy === "REQUEST_REQUIRED" || club.joinPolicy === "INVITE_ONLY") {
     return club.joinPolicy;
   }
-  return club.isPublic === false ? "REQUEST_REQUIRED" : "OPEN";
+  return club.isPublic === false ? "INVITE_ONLY" : "OPEN";
 }
 
 function formatJoinPolicyLabel(policy: ClubJoinPolicy): string {

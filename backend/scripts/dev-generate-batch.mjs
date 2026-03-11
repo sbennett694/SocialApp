@@ -19,12 +19,26 @@ function hasFlag(name) {
   return args.includes(`--${name}`);
 }
 
+function getNumericShortcutCount() {
+  for (const entry of args) {
+    const match = entry.match(/^--(\d+)$/);
+    if (!match) continue;
+    const parsed = Number(match[1]);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return String(parsed);
+    }
+  }
+  return undefined;
+}
+
 const preset = (getArg("preset", "all") || "all").toLowerCase();
-const count = getArg("count", undefined);
+const allCount = getArg("all", getNumericShortcutCount());
+const count = getArg("count", allCount);
 const actor = getArg("actor", undefined);
 const postAuthor = getArg("post-author", undefined);
 const commenter = getArg("commenter", undefined);
 const delayMs = getArg("delay-ms", undefined);
+const useDefaultValues = hasFlag("default") || !!allCount;
 const usersArg = getArg("users", "alex,jamie,taylor");
 const users = usersArg
   .split(",")
@@ -117,8 +131,15 @@ function buildCommandArgsForRun(run) {
   const commandArgs = [generatorScriptPath, run.command];
   const includeCount = count && run.command !== "create-milestones" && run.command !== "create-tasks" ? true : !!count;
 
+  if (useDefaultValues) {
+    commandArgs.push("--default");
+  }
+
   if (includeCount) {
     commandArgs.push("--count", count);
+  }
+  if (allCount && run.command === "scenario-comment-nav") {
+    commandArgs.push("--post-count", allCount);
   }
   if (delayMs) {
     commandArgs.push("--delay-ms", delayMs);
@@ -132,7 +153,9 @@ function buildCommandArgsForRun(run) {
   }
 
   if (hasFlag("non-interactive") && !count) {
-    commandArgs.push("--count", "1");
+    commandArgs.push("--non-interactive", "--count", "1");
+  } else if (hasFlag("non-interactive")) {
+    commandArgs.push("--non-interactive");
   }
 
   return commandArgs;

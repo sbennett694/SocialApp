@@ -11,7 +11,9 @@
     "dev:reseed": "node scripts/dev-seed.mjs reseed",
     "dev:generate": "node scripts/dev-generate.mjs",
     "dev:scenario:comment-nav": "node scripts/dev-generate.mjs scenario-comment-nav",
-    "dev:generate:batch": "node scripts/dev-generate-batch.mjs"
+    "dev:generate:batch": "node scripts/dev-generate-batch.mjs",
+    "dev:gen:default": "node scripts/dev-generate-batch.mjs --default",
+    "dev:gen:3": "node scripts/dev-generate-batch.mjs --3"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.750.0",

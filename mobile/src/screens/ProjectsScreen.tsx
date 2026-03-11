@@ -30,7 +30,9 @@ import {
 } from "../api/client";
 import { AuthUser } from "../auth/session";
 import { CategorySelectorField } from "../components/CategorySelectorField";
+import { ClubCard } from "../components/ClubCard";
 import { useTemporaryHighlight } from "../lib/useTemporaryHighlight";
+import { ClubWithCounts } from "../types/club";
 
 type MilestoneVisualState = "COMPLETED" | "IN_PROGRESS" | "FUTURE";
 
@@ -88,8 +90,8 @@ export function ProjectsScreen({
   const pendingScrollIndexRef = useRef<number | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
-  const [allClubs, setAllClubs] = useState<Club[]>([]);
-  const [myClubs, setMyClubs] = useState<Club[]>([]);
+  const [allClubs, setAllClubs] = useState<ClubWithCounts[]>([]);
+  const [myClubs, setMyClubs] = useState<ClubWithCounts[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -148,6 +150,10 @@ export function ProjectsScreen({
   );
 
   const activeMilestone = firstOpenMilestoneIndex >= 0 ? orderedMilestones[firstOpenMilestoneIndex] : null;
+  const activeMilestoneNextTask = useMemo(
+    () => activeMilestone?.tasks.find((task) => !task.isDone) ?? null,
+    [activeMilestone]
+  );
 
   const associatedCategoryIdsForCreate = useMemo(
     () => Array.from(new Set([...projects.map((project) => project.categoryId), ...myClubs.map((club) => club.categoryId)])),
@@ -316,7 +322,7 @@ export function ProjectsScreen({
       setTimeout(() => {
         logFocusDebug("triggering nested highlight", key);
         triggerNestedItemHighlight(key);
-      }, 180);
+      }, 260);
       onFocusItemConsumed?.(pendingFocusItem.id, pendingFocusItem.type);
       setPendingFocusItem(null);
     };
@@ -324,25 +330,34 @@ export function ProjectsScreen({
     const scrollToTargetWhenReady = (attempt = 0) => {
       const targetOffset = targetMilestoneId ? milestoneOffsetByIdRef.current[targetMilestoneId] : undefined;
       logFocusDebug("scroll readiness check", { attempt, targetMilestoneId, targetOffset, scrollIndex });
+      if (scrollIndex >= 0) {
+        pendingScrollIndexRef.current = scrollIndex;
+        InteractionManager.runAfterInteractions(() => {
+          logFocusDebug("scrolling via index", { scrollIndex, viewPosition: 0.5 });
+          milestonesListRef.current?.scrollToIndex({
+            index: scrollIndex,
+            animated: true,
+            viewPosition: 0.5
+          });
+          completeFocus();
+        });
+        return;
+      }
+
       if (targetOffset === undefined) {
         if (attempt >= 10) {
-          if (scrollIndex >= 0) {
-            pendingScrollIndexRef.current = scrollIndex;
-            logFocusDebug("offset unavailable after retries; falling back to scrollToIndex", { scrollIndex });
-            milestonesListRef.current?.scrollToIndex({ index: scrollIndex, animated: true, viewPosition: 0.3 });
-          }
           completeFocus();
           return;
         }
 
         focusScrollRetryTimeoutRef.current = setTimeout(() => {
           scrollToTargetWhenReady(attempt + 1);
-        }, 80);
+        }, 100);
         return;
       }
 
       InteractionManager.runAfterInteractions(() => {
-        logFocusDebug("scrolling via offset", { targetOffset, adjustedOffset: Math.max(0, targetOffset - 120) });
+        logFocusDebug("scrolling via offset fallback", { targetOffset, adjustedOffset: Math.max(0, targetOffset - 120) });
         milestonesListRef.current?.scrollToOffset({
           offset: Math.max(0, targetOffset - 120),
           animated: true
@@ -1188,19 +1203,16 @@ export function ProjectsScreen({
           <View style={styles.activeMilestoneBox}>
             <Text style={styles.activeMilestoneTitle}>Active Milestone</Text>
             {activeMilestone ? (
-              <>
+              <Pressable
+                onPress={() => setPendingFocusItem({ id: activeMilestone.id, type: "MILESTONE" })}
+                style={styles.activeMilestoneSummaryCard}
+              >
                 <Text style={styles.title}>{activeMilestone.order}. {activeMilestone.title}</Text>
-                {formatScheduleValue(activeMilestone.startAt) ? <Text style={styles.hint}>Start: {formatScheduleValue(activeMilestone.startAt)}</Text> : null}
-                {formatScheduleValue(activeMilestone.dueAt) ? <Text style={styles.hint}>Due: {formatScheduleValue(activeMilestone.dueAt)}</Text> : null}
-                {(activeMilestone.tasks ?? []).length === 0 ? <Text style={styles.hint}>No tasks yet.</Text> : null}
-                {(activeMilestone.tasks ?? []).map((task) => (
-                  <View key={task.id} style={styles.activeMilestoneTaskBlock}>
-                    <Text style={styles.hint}>{task.isDone ? "☑" : "☐"} {task.text}</Text>
-                    {formatScheduleValue(task.startAt) ? <Text style={styles.hint}>Start: {formatScheduleValue(task.startAt)}</Text> : null}
-                    {formatScheduleValue(task.dueAt) ? <Text style={styles.hint}>Due: {formatScheduleValue(task.dueAt)}</Text> : null}
-                  </View>
-                ))}
-              </>
+                <Text style={styles.hint}>
+                  Next task: {activeMilestoneNextTask ? activeMilestoneNextTask.text : "No remaining tasks"}
+                </Text>
+                <Text style={styles.activeMilestoneJumpHint}>Tap to jump to milestone</Text>
+              </Pressable>
             ) : (
               <Text style={styles.hint}>All milestones completed 🎉</Text>
             )}
@@ -1260,7 +1272,7 @@ export function ProjectsScreen({
             milestonesListRef.current?.scrollToIndex({
               index: safeIndex,
               animated: true,
-              viewPosition: 0.3
+              viewPosition: 0.5
             });
 
             setTimeout(() => {
@@ -1268,7 +1280,7 @@ export function ProjectsScreen({
               milestonesListRef.current?.scrollToIndex({
                 index: requestedIndex,
                 animated: true,
-                viewPosition: 0.3
+                viewPosition: 0.5
               });
             }, 180);
           }}
@@ -1430,9 +1442,12 @@ export function ProjectsScreen({
               {createAs === "CLUB" ? (
                 <View style={styles.rowWrap}>
                   {myClubs.map((club) => (
-                    <Pressable key={club.id} onPress={() => setSelectedClubId(club.id)} style={[styles.pill, selectedClubId === club.id && styles.pillActive]}>
-                      <Text style={[styles.pillText, selectedClubId === club.id && styles.pillTextActive]}>{club.name}</Text>
-                    </Pressable>
+                    <ClubCard
+                      key={club.id}
+                      club={club}
+                      selected={selectedClubId === club.id}
+                      onPress={() => setSelectedClubId(club.id)}
+                    />
                   ))}
                 </View>
               ) : null}
@@ -1501,6 +1516,19 @@ const styles = StyleSheet.create({
   milestoneFuture: { borderColor: "#b0b0b0", backgroundColor: "#f7f7f7" },
   activeMilestoneBox: { marginTop: 6, borderWidth: 1, borderColor: "#d9d9d9", borderRadius: 8, padding: 8 },
   activeMilestoneTitle: { fontWeight: "700", marginBottom: 4 },
+  activeMilestoneSummaryCard: {
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: "#fff"
+  },
+  activeMilestoneJumpHint: {
+    color: "#0b57d0",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 6
+  },
   activeMilestoneTaskBlock: { marginTop: 4 },
   taskRow: { paddingVertical: 3, flexDirection: "row", alignItems: "center" }
   ,

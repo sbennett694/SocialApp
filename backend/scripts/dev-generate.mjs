@@ -5,6 +5,10 @@ const command = (process.argv[2] || "help").toLowerCase();
 const args = process.argv.slice(3);
 const baseUrl = process.env.SOCIALAPP_LOCAL_API_URL || "http://127.0.0.1:3001";
 
+function hasFlag(name) {
+  return args.includes(`--${name}`);
+}
+
 function getArg(name, fallback) {
   const exact = `--${name}`;
   const withValue = args.find((entry) => entry.startsWith(`${exact}=`));
@@ -35,6 +39,7 @@ function sleep(ms) {
 }
 
 async function promptCount(defaultCount) {
+  if (hasFlag("default") || hasFlag("non-interactive")) return defaultCount;
   if (!process.stdin.isTTY) return defaultCount;
   const rl = createInterface({ input, output });
   try {
@@ -301,7 +306,7 @@ const handlers = {
 };
 
 function printHelp() {
-  console.log(`Usage:\n  node scripts/dev-generate.mjs <command> [options]\n\nCommands:\n  create-clubs\n  create-projects\n  create-milestones\n  create-tasks\n  create-comments\n  scenario-comment-nav\n\nCommon options:\n  --actor <userId>\n  --count <n>\n  --prefix <label prefix>\n  --delay-ms <ms>\n`);
+  console.log(`Usage:\n  node scripts/dev-generate.mjs <command> [options]\n\nCommands:\n  create-clubs\n  create-projects\n  create-milestones\n  create-tasks\n  create-comments\n  scenario-comment-nav\n\nCommon options:\n  --actor <userId>\n  --count <n>\n  --prefix <label prefix>\n  --delay-ms <ms>\n  --default              Use built-in defaults without prompting\n  --non-interactive      Skip prompts and use provided/default values\n`);
 }
 
 async function run() {
