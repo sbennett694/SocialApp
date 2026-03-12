@@ -11,6 +11,22 @@ const STATUS_FILE = path.join(ORCH_DIR, "task-status.json");
 const REPORT_TEMPLATE = path.join(ORCH_DIR, "task-completion-template.md");
 const REPORTS_DIR = path.join(ORCH_DIR, "reports");
 
+function ensureCleanGit() {
+  const { execSync } = require("child_process");
+
+  try {
+    const status = execSync("git status --porcelain", { encoding: "utf8" }).trim();
+
+    if (status.length > 0) {
+      console.log("\nYour working directory has uncommitted changes.\n");
+      console.log("Please commit or stash them before starting a new task.\n");
+      process.exit(1);
+    }
+  } catch (err) {
+    console.log("Warning: Unable to check git status.");
+  }
+}
+
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
@@ -18,6 +34,59 @@ function readJson(file) {
 function writeJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
 }
+
+function checkTaskSanity(taskId) {
+  const taskDir = taskPath(taskId);
+
+  const requiredFiles = [
+    "requirements.md",
+    "design.md"
+  ];
+
+  const recommendedFiles = [
+    "user-story.md",
+    "prompt.md"
+  ];
+
+  const missingRequired = requiredFiles.filter((file) =>
+    !exists(path.join(taskDir, file))
+  );
+
+  const missingRecommended = recommendedFiles.filter((file) =>
+    !exists(path.join(taskDir, file))
+  );
+
+  return {
+    taskId,
+    taskDir,
+    missingRequired,
+    missingRecommended,
+    passed: missingRequired.length === 0
+  };
+}
+
+function printSanityCheck(result) {
+  console.log(`\nPhase 0 — Task Sanity Check: ${result.taskId}\n`);
+
+  if (result.missingRequired.length === 0) {
+    console.log("Required files: OK");
+  } else {
+    console.log("Missing required files:");
+    result.missingRequired.forEach((file) => console.log(`- ${file}`));
+  }
+
+  if (result.missingRecommended.length === 0) {
+    console.log("Recommended files: OK");
+  } else {
+    console.log("Missing recommended files:");
+    result.missingRecommended.forEach((file) => console.log(`- ${file}`));
+  }
+
+  console.log(
+    `Recommendation: ${result.passed ? "Proceed" : "Request clarification / complete task docs"}`
+  );
+}
+
 function getUntrackedFiles() {
   const output = run("git ls-files --others --exclude-standard");
   return output ? output.split(/\r?\n/).filter(Boolean) : [];
@@ -237,15 +306,47 @@ function next() {
   printBootstrapPrompt(nextTask);
 }
 
+function sanity(taskId) {
+  const data = getStatusData();
+
+  if (!data.tasks[taskId]) {
+    throw new Error(`Task not found in task-status.json: ${taskId}`);
+  }
+
+  if (!exists(taskPath(taskId))) {
+    throw new Error(`Task folder missing: ${taskPath(taskId)}`);
+  }
+
+  const result = checkTaskSanity(taskId);
+  printSanityCheck(result);
+
+  if (!result.passed) {
+    console.log("\nSanity check failed.\n");
+    process.exit(1);
+  }
+
+  console.log("\nSanity check passed.\n");
+}
+
 function start(taskId) {
+  ensureCleanGit();
+
   const data = getStatusData();
   if (!data.tasks[taskId]) throw new Error(`Task not found: ${taskId}`);
   if (!exists(taskPath(taskId))) throw new Error(`Task folder missing: ${taskPath(taskId)}`);
 
+  const sanity = checkTaskSanity(taskId);
+  printSanityCheck(sanity);
+
+  if (!sanity.passed) {
+    console.log("\nTask cannot be started until required task files exist.\n");
+    process.exit(1);
+  }
+
   data.tasks[taskId].status = "in-progress";
   saveStatusData(data);
 
-  console.log(`Task marked in-progress: ${taskId}\n`);
+  console.log(`\nTask marked in-progress: ${taskId}\n`);
   printBootstrapPrompt(taskId);
 }
 
@@ -331,6 +432,7 @@ function usage() {
 Usage:
   node scripts/task-runner.js status
   node scripts/task-runner.js next
+  node scripts/task-runner.js sanity <task-id>
   node scripts/task-runner.js start <task-id>
   node scripts/task-runner.js review <task-id>
   node scripts/task-runner.js complete <task-id>
@@ -343,6 +445,7 @@ function main() {
   try {
     if (cmd === "status") return status();
     if (cmd === "next") return next();
+    if (cmd === "sanity") return taskId ? sanity(taskId) : usage();
     if (cmd === "start") return taskId ? start(taskId) : usage();
     if (cmd === "review") return taskId ? review(taskId) : usage();
     if (cmd === "complete") return taskId ? complete(taskId) : usage();

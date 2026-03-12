@@ -9,6 +9,7 @@
     "dev:seed-data": "npm --prefix backend run dev:seed",
     "dev:reseed-data": "npm --prefix backend run dev:reseed",
     "task:status": "node scripts/task-runner.js status",
+    "task:sanity": "node scripts/task-runner.js sanity",
     "task:next": "node scripts/task-runner.js next",
     "task:start": "node scripts/task-runner.js start",
     "task:review": "node scripts/task-runner.js review",
