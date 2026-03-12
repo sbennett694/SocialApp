@@ -92,6 +92,52 @@ function getUntrackedFiles() {
   return output ? output.split(/\r?\n/).filter(Boolean) : [];
 }
 
+function getStatusIcon(status) {
+  const map = {
+    "completed": "✅",
+    "in-progress": "🚧",
+    "review": "🔎",
+    "pending": "⏳",
+    "blocked": "⛔"
+  };
+  return map[status] || "❔";
+}
+
+function getRoadmapGroups() {
+  return [
+    {
+      name: "Foundation",
+      tasks: [
+        "001-club-admin-panel-polish",
+        "002-notification-preview-navigation",
+        "003-private-friends-notes"
+      ]
+    },
+    {
+      name: "Core Social",
+      tasks: [
+        "004-club-commons-feed",
+        "005-project-activity-timeline",
+        "006-feed-card-types",
+        "007-notification-preview-text",
+        "008-club-project-creation",
+        "009-volunteer-system",
+        "010-profile-privacy-fields"
+      ]
+    },
+    {
+      name: "Reputation",
+      tasks: [
+        "011-skill-endorsements",
+        "012-contribution-metrics",
+        "013-praise-tokens",
+        "014-reputation-guardrails",
+        "015-impact-profile-ui"
+      ]
+    }
+  ];
+}
+
 function splitCreatedVsModified(files) {
   const untracked = new Set(getUntrackedFiles());
   const created = [];
@@ -110,41 +156,47 @@ function buildAutofillReport(taskId, reportPathValue, files) {
   const { created, modified } = splitCreatedVsModified(files);
   const testFiles = changedTestFiles(files);
 
-  const report = `# Task Completion Report
+  if (!exists(REPORT_TEMPLATE)) {
+    throw new Error(`Missing report template: ${REPORT_TEMPLATE}`);
+  }
 
-Task ID: ${taskId}
+  let content = fs.readFileSync(REPORT_TEMPLATE, "utf8");
 
-Status: review
+  content = content.replace(
+    /Task ID:\s*/i,
+    `Task ID: ${taskId}\n`
+  );
 
-Summary:
-TODO
+  const createdSection =
+    created.length ? created.map((f) => `- ${f}`).join("\n") : "- none detected";
 
-Files Created:
-${created.length ? created.map((f) => `- ${f}`).join("\n") : "None"}
+  const modifiedSection =
+    modified.length ? modified.map((f) => `- ${f}`).join("\n") : "- none detected";
 
-Files Modified:
-${modified.length ? modified.map((f) => `- ${f}`).join("\n") : "None"}
+  const testSection =
+    testFiles.length ? testFiles.map((f) => `- ${f}`).join("\n") : "- none detected";
 
-Tests Added:
-${testFiles.length ? testFiles.map((f) => `- ${f}`).join("\n") : "None"}
+  content = content.replace(
+    /# Files Modified\r?\n\r?\n-/,
+    `# Files Modified\n\n${modifiedSection}`
+  );
 
-Commands Run:
-TODO
+  content = content.replace(
+    /# Files Added\r?\n\r?\n-/,
+    `# Files Added\n\n${createdSection}`
+  );
 
-Test Results:
-TODO
+  content = content.replace(
+    /# Tests Run\r?\n\r?\n-/,
+    `# Tests Run\n\n${testSection}`
+  );
 
-Manual Validation Notes:
-TODO
+  content = content.replace(
+    /# Manual Validation Steps\r?\n\r?\n1\.\r?\n2\.\r?\n3\./,
+    `# Manual Validation Steps\n\n1. Verify feature behavior in UI\n2. Confirm expected data flow\n3. Validate edge cases`
+  );
 
-Known Gaps:
-TODO
-
-Follow-Up Suggestions:
-TODO
-`;
-
-  fs.writeFileSync(reportPathValue, report, "utf8");
+  fs.writeFileSync(reportPathValue, content, "utf8");
 }
 
 function exists(p) {
@@ -265,6 +317,7 @@ Before doing anything else, read:
 - Task Folders/${taskId}/requirements.md
 - Task Folders/${taskId}/design.md
 - Task Folders/${taskId}/prompt.md
+- Task Folders/${taskId}/user-story.md (if present)
 - Task Folders/shared/task-contract.md
 - Task Folders/shared/TESTING_GUIDELINES.md
 - Task Folders/shared/repo-orientation.md
@@ -280,6 +333,13 @@ Then inspect the repository and return a concise implementation plan that includ
 - frontend/mobile changes
 - test plan
 - risks / assumptions
+- if the task is unclear or conflicts with the user story, pause and request clarification
+
+When implementation completes, include technical change details in the report:
+- functions modified
+- functions added
+- key routes, endpoints, components, hooks, services, or structures affected
+- how the implementation supports the user story and expected state 
 
 Do NOT implement yet.
 Wait for my approval before making changes.
@@ -394,14 +454,17 @@ function complete(taskId) {
   const report = ensureReport(taskId);
   const reportBody = fs.readFileSync(report, "utf8");
 
-  const requiredSections = [
-    "Summary:",
-    "Files Created:",
-    "Files Modified:",
-    "Tests Added:",
-    "Commands Run:",
-    "Test Results:"
-  ];
+const requiredSections = [
+  "# Summary",
+  "# User Value Alignment",
+  "# Files Modified",
+  "# Files Added",
+  "# Tests Run",
+  "# Manual Validation Steps",
+  "# Known Gaps",
+  "# Follow-Up Suggestions",
+  "# Dev Review"
+];
 
   const missing = requiredSections.filter((section) => !reportBody.includes(section));
   if (missing.length) {
@@ -427,6 +490,24 @@ function complete(taskId) {
   }
 }
 
+function roadmap() {
+  const data = getStatusData();
+  const groups = getRoadmapGroups();
+
+  console.log("\nProSocial Roadmap\n");
+
+  for (const group of groups) {
+    console.log(`${group.name}`);
+    for (const taskId of group.tasks) {
+      const task = data.tasks[taskId];
+      const status = task ? task.status : "missing";
+      const icon = getStatusIcon(status);
+      console.log(`  ${icon} ${taskId}`);
+    }
+    console.log("");
+  }
+}
+
 function usage() {
   console.log(`
 Usage:
@@ -436,6 +517,7 @@ Usage:
   node scripts/task-runner.js start <task-id>
   node scripts/task-runner.js review <task-id>
   node scripts/task-runner.js complete <task-id>
+  node scripts/task-runner.js roadmap
 `.trim());
 }
 
@@ -449,6 +531,7 @@ function main() {
     if (cmd === "start") return taskId ? start(taskId) : usage();
     if (cmd === "review") return taskId ? review(taskId) : usage();
     if (cmd === "complete") return taskId ? complete(taskId) : usage();
+    if (cmd === "roadmap") return roadmap();
     usage();
   } catch (err) {
     console.error(`Error: ${err.message}`);

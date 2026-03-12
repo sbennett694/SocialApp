@@ -85,6 +85,41 @@ export const feedEventService = {
     });
   },
 
+  emitCommentAdded(input: {
+    entityId: string;
+    actorId: string;
+    visibility: Visibility;
+    threadType: "COMMENTS" | "QUESTIONS" | "THANK_YOU" | "SUGGESTIONS";
+    clubId?: string;
+    projectId?: string;
+    postId: string;
+    moderationState?: ModerationState;
+  }) {
+    const eventTypeByThreadType = {
+      COMMENTS: "COMMENT_ADDED",
+      QUESTIONS: "QUESTION_ADDED",
+      THANK_YOU: "GRATITUDE_ADDED",
+      SUGGESTIONS: "SUGGESTION_ADDED"
+    } as const;
+
+    return emitFeedEvent({
+      eventType: eventTypeByThreadType[input.threadType],
+      contextType: "COMMENT",
+      entityType: "COMMENT",
+      entityId: input.entityId,
+      actorId: input.actorId,
+      source: "CLUBS",
+      visibility: input.visibility,
+      clubId: input.clubId,
+      projectId: input.projectId,
+      moderationState: input.moderationState,
+      metadata: {
+        threadType: input.threadType,
+        postId: input.postId
+      }
+    });
+  },
+
   emitProjectCreated(input: { entityId: string; actorId: string; visibility?: Visibility; projectId?: string; clubId?: string }) {
     return emitFeedEvent({
       eventType: "PROJECT_CREATED",
@@ -150,6 +185,26 @@ export const feedEventService = {
       visibility: input.visibility ?? "PUBLIC",
       projectId: input.projectId,
       clubId: input.clubId
+    });
+  },
+
+  emitClubEventCreated(input: {
+    entityId: string;
+    actorId: string;
+    visibility: Visibility;
+    clubId: string;
+    summary?: string;
+  }) {
+    return emitFeedEvent({
+      eventType: "CLUB_EVENT_CREATED",
+      contextType: "CLUB_EVENT",
+      entityType: "CLUB_EVENT",
+      entityId: input.entityId,
+      actorId: input.actorId,
+      source: "CLUBS",
+      visibility: input.visibility,
+      clubId: input.clubId,
+      summary: input.summary
     });
   }
 };

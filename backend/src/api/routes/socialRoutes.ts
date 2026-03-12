@@ -1566,6 +1566,35 @@ router.get("/clubs/:clubId/events", (req, res) => {
   return res.json(visibleEvents);
 });
 
+router.get("/clubs/:clubId/commons-feed", (req, res) => {
+  const clubId = String(req.params.clubId);
+  const viewerId = String(req.query.viewerId ?? "");
+  const limitRaw = req.query.limit ? Number(req.query.limit) : undefined;
+  const cursor = decodeFeedCursor(req.query.cursor ? String(req.query.cursor) : undefined);
+
+  const club = clubs.find((entry) => entry.id === clubId);
+  if (!club) {
+    return res.status(404).json({ message: "Club not found." });
+  }
+
+  const isMember = !!viewerId && !!getClubMembershipRole(clubId, viewerId);
+  if (!club.isPublic && !isMember && club.ownerId !== viewerId) {
+    return res.status(403).json({ message: "Only club members can view the commons feed for private clubs." });
+  }
+
+  const result = feedQueryService.queryClubCommonsFeed({
+    viewerId,
+    clubId,
+    limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+    cursor
+  });
+
+  return res.json({
+    items: result.items,
+    nextCursor: encodeFeedCursor(result.nextCursor)
+  });
+});
+
 router.post("/clubs/:clubId/events", (req, res) => {
   const clubId = String(req.params.clubId);
   const actorId = String(req.body?.actorId ?? "");
@@ -1633,6 +1662,16 @@ router.post("/clubs/:clubId/events", (req, res) => {
   };
 
   clubEvents.push(event);
+
+  emitFeedEventSafely(() => {
+    feedEventService.emitClubEventCreated({
+      entityId: event.id,
+      actorId,
+      clubId,
+      visibility: event.visibility === "PUBLIC_CLUB" ? "PUBLIC" : "CLUB",
+      summary: event.title
+    });
+  });
 
   clubHistoryRepository.append({
     clubId,
@@ -2745,6 +2784,20 @@ router.post("/comments", (req, res) => {
   };
 
   comments.push(comment);
+
+  emitFeedEventSafely(() => {
+    feedEventService.emitCommentAdded({
+      entityId: comment.id,
+      actorId: authorId,
+      visibility: post.visibility,
+      threadType,
+      clubId: post.clubId,
+      projectId: post.projectId,
+      postId: post.postId,
+      moderationState: comment.moderationState
+    });
+  });
+
   return res.status(201).json(comment);
 });
 

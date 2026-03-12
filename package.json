@@ -13,6 +13,7 @@
     "task:next": "node scripts/task-runner.js next",
     "task:start": "node scripts/task-runner.js start",
     "task:review": "node scripts/task-runner.js review",
-    "task:complete": "node scripts/task-runner.js complete"
+    "task:complete": "node scripts/task-runner.js complete",
+    "task:roadmap": "node scripts/task-runner.js roadmap"
   }
 }

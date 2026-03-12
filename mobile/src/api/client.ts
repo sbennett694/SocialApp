@@ -108,10 +108,28 @@ export type Post = {
 export type FeedEventType =
   | "POST_CREATED"
   | "CLUB_POST_CREATED"
+  | "COMMENT_ADDED"
+  | "QUESTION_ADDED"
+  | "SUGGESTION_ADDED"
+  | "GRATITUDE_ADDED"
   | "PROJECT_HIGHLIGHT_CREATED"
   | "MILESTONE_COMPLETED"
   | "TASK_COMPLETED"
+  | "CLUB_EVENT_CREATED"
   | "PROJECT_CREATED";
+
+export type ClubCommonsFeedItem = {
+  id: string;
+  clubId: string;
+  activityType: "highlight" | "comment" | "suggestion" | "question" | "gratitude" | "milestone_update" | "volunteer_event";
+  actorId: string;
+  createdAt: string;
+  previewText: string;
+  entityType: "POST" | "COMMENT" | "PROJECT_HIGHLIGHT" | "PROJECT_MILESTONE" | "PROJECT_TASK" | "CLUB_EVENT" | "PROJECT";
+  entityId: string;
+  projectId?: string;
+  postId?: string;
+};
 
 export type FeedEvent = {
   id: string;
@@ -912,6 +930,22 @@ export async function getClubHistory(clubId: string, limit = 50): Promise<ClubHi
     throw await extractApiError(response, "Club history load failed");
   }
   return response.json();
+}
+
+export async function getClubCommonsFeed(
+  clubId: string,
+  viewerId: string,
+  limit = 40
+): Promise<ClubCommonsFeedItem[]> {
+  const query = new URLSearchParams();
+  query.set("viewerId", viewerId);
+  query.set("limit", String(limit));
+  const response = await apiFetch(`/clubs/${encodeURIComponent(clubId)}/commons-feed?${query.toString()}`);
+  if (!response.ok) {
+    throw await extractApiError(response, "Club commons feed load failed");
+  }
+  const payload = (await response.json()) as { items?: ClubCommonsFeedItem[] };
+  return payload.items ?? [];
 }
 
 export async function getProjects(ownerId?: string, clubId?: string): Promise<Project[]> {

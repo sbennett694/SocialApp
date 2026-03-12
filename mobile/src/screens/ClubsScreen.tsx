@@ -4,6 +4,7 @@ import DateTimePicker, { DateTimePickerAndroid, DateTimePickerEvent } from "@rea
 import { Calendar, DateData } from "react-native-calendars";
 import {
   Club,
+  ClubCommonsFeedItem,
   ClubEvent,
   ClubHistoryEvent,
   ClubJoinPolicy,
@@ -14,6 +15,7 @@ import {
   createPost,
   createClub,
   getCategories,
+  getClubCommonsFeed,
   getClubEvents,
   getClubHistory,
   getClubJoinRequests,
@@ -66,6 +68,48 @@ type ClubStatsSummary = {
   totalHighlightsCount: number;
 };
 
+function formatClubCommonsActivityLabel(activityType: ClubCommonsFeedItem["activityType"]): string {
+  switch (activityType) {
+    case "highlight":
+      return "Highlight";
+    case "comment":
+      return "Comment";
+    case "suggestion":
+      return "Suggestion";
+    case "question":
+      return "Question";
+    case "gratitude":
+      return "Gratitude";
+    case "milestone_update":
+      return "Milestone Update";
+    case "volunteer_event":
+      return "Volunteer Event";
+    default:
+      return "Activity";
+  }
+}
+
+function formatClubCommonsActivityIcon(activityType: ClubCommonsFeedItem["activityType"]): string {
+  switch (activityType) {
+    case "highlight":
+      return "✨";
+    case "comment":
+      return "💬";
+    case "suggestion":
+      return "💡";
+    case "question":
+      return "❓";
+    case "gratitude":
+      return "🙏";
+    case "milestone_update":
+      return "🏁";
+    case "volunteer_event":
+      return "🗓️";
+    default:
+      return "•";
+  }
+}
+
 function formatProjectVisibilityLabel(visibility: string): string {
   switch (visibility) {
     case "PUBLIC":
@@ -117,7 +161,7 @@ export function ClubsScreen({
   onBackToClubsRoot,
   onNavigateToProject
 }: ClubsScreenProps) {
-  const clubHighlightsListRef = useRef<FlatList<Post> | null>(null);
+  const clubHighlightsListRef = useRef<FlatList<ClubCommonsFeedItem> | null>(null);
   const {
     highlightedId: highlightedClubId,
     triggerHighlight: triggerClubHighlight,
@@ -135,6 +179,7 @@ export function ClubsScreen({
   const [joinableClubs, setJoinableClubs] = useState<Club[]>([]);
   const [clubFeed, setClubFeed] = useState<Post[]>([]);
   const [detailClubFeed, setDetailClubFeed] = useState<Post[]>([]);
+  const [clubCommonsFeed, setClubCommonsFeed] = useState<ClubCommonsFeedItem[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
 
   const [clubSearch, setClubSearch] = useState("");
@@ -310,7 +355,7 @@ export function ClubsScreen({
 
   useEffect(() => {
     if (!pendingFocusClubPostId || !viewingClub) return;
-    const targetIndex = detailClubFeed.findIndex((post) => post.postId === pendingFocusClubPostId);
+    const targetIndex = clubCommonsFeed.findIndex((item) => item.postId === pendingFocusClubPostId || item.entityId === pendingFocusClubPostId);
     if (targetIndex < 0) return;
 
     if (clubDetailTab !== "HIGHLIGHTS") {
@@ -325,8 +370,8 @@ export function ClubsScreen({
     onFocusClubPostConsumed?.(pendingFocusClubPostId);
     setPendingFocusClubPostId(null);
   }, [
+    clubCommonsFeed,
     clubDetailTab,
-    detailClubFeed,
     onFocusClubPostConsumed,
     pendingFocusClubPostId,
     triggerClubPostHighlight,
@@ -421,13 +466,15 @@ export function ClubsScreen({
     setClubDetailTab("HIGHLIGHTS");
     setClubDetailLoading(true);
     try {
-      const [members, projects, clubPosts, history, events] = await Promise.all([
+      const [commonsFeed, members, projects, clubPosts, history, events] = await Promise.all([
+        getClubCommonsFeed(club.id, user.userId),
         getClubMembers(club.id),
         getClubProjects(club.id),
         getClubsFeed(user.userId, club.id),
         getClubHistory(club.id, 50),
         getClubEvents(club.id, user.userId, "all")
       ]);
+      setClubCommonsFeed(commonsFeed);
       setClubMembers(members);
       setClubProjects(projects);
       setDetailClubFeed(clubPosts);
@@ -907,8 +954,25 @@ export function ClubsScreen({
   const clubStatsSummary: ClubStatsSummary = {
     membersCount: clubMembers.length,
     pendingJoinRequestsCount: clubJoinRequests.length,
-    totalHighlightsCount: detailClubFeed.length
+    totalHighlightsCount: clubCommonsFeed.length
   };
+
+  function handlePressClubCommonsItem(item: ClubCommonsFeedItem) {
+    if (item.projectId) {
+      onNavigateToProject?.(item.projectId);
+      return;
+    }
+
+    if (item.activityType === "volunteer_event") {
+      setClubDetailTab("EVENTS");
+      return;
+    }
+
+    if (item.postId) {
+      setPendingFocusClubPostId(item.postId);
+      triggerClubPostHighlight(item.postId);
+    }
+  }
 
   function toLocalDateKey(rawDate: string): string | null {
     const parsed = new Date(rawDate);
@@ -1181,7 +1245,7 @@ export function ClubsScreen({
 
             {clubDetailTab === "HIGHLIGHTS" ? (
               <>
-                <Text style={styles.sectionTitle}>Club Highlights</Text>
+                <Text style={styles.sectionTitle}>Club Commons Feed</Text>
                 {canManageClub ? (
                   <View style={styles.card}>
                     <Text style={styles.filterLabel}>Post highlight as club</Text>
@@ -1196,24 +1260,39 @@ export function ClubsScreen({
                     </Pressable>
                   </View>
                 ) : null}
-                {detailClubFeed.length === 0 ? <Text style={styles.hint}>No club posts yet.</Text> : null}
+                {clubCommonsFeed.length === 0 ? <Text style={styles.hint}>No club activity yet.</Text> : null}
                 <FlatList
                   ref={clubHighlightsListRef}
-                  data={detailClubFeed}
-                  keyExtractor={(post) => `club-feed-${post.postId}`}
+                  data={clubCommonsFeed}
+                  keyExtractor={(item) => `club-commons-${item.id}`}
                   style={styles.clubHighlightsList}
                   nestedScrollEnabled
                   onScrollToIndexFailed={() => {
                     clubHighlightsListRef.current?.scrollToOffset({ offset: 0, animated: true });
                   }}
-                  renderItem={({ item: post }) => {
-                    const focused = highlightedClubPostId === post.postId;
+                  renderItem={({ item }) => {
+                    const focusId = item.postId ?? item.entityId;
+                    const focused = highlightedClubPostId === focusId;
                     return (
-                      <Animated.View style={[styles.card, focused ? styles.focusedTargetItem : null, focused ? clubPostEmphasisAnimatedStyle : null, focused ? clubPostGlowAnimatedStyle : null]}>
-                        <Text style={styles.clubName}>
-                          {post.postedAsClub ? `@${viewingClub.name} by ${post.clubActorId ?? post.userId}` : `@${post.userId}`}
-                        </Text>
-                        <Text>{post.text}</Text>
+                      <Animated.View
+                        style={[
+                          styles.card,
+                          focused ? styles.focusedTargetItem : null,
+                          focused ? clubPostEmphasisAnimatedStyle : null,
+                          focused ? clubPostGlowAnimatedStyle : null
+                        ]}
+                      >
+                        <Pressable onPress={() => handlePressClubCommonsItem(item)}>
+                          <View style={styles.cardTitleRow}>
+                            <Text style={styles.clubName}>
+                              {formatClubCommonsActivityIcon(item.activityType)} {formatClubCommonsActivityLabel(item.activityType)}
+                            </Text>
+                            <Text style={styles.openHint}>Open ›</Text>
+                          </View>
+                          <Text style={styles.hint}>By @{item.actorId}</Text>
+                          <Text style={styles.activityPreviewText}>{item.previewText}</Text>
+                          <Text style={styles.activityMetaText}>{new Date(item.createdAt).toLocaleString()}</Text>
+                        </Pressable>
                       </Animated.View>
                     );
                   }}
@@ -2404,6 +2483,14 @@ const styles = StyleSheet.create({
   },
   clubHighlightsList: {
     maxHeight: 340
+  },
+  activityPreviewText: {
+    color: "#222",
+    marginBottom: 6
+  },
+  activityMetaText: {
+    fontSize: 12,
+    color: "#666"
   },
   buttonText: { fontWeight: "600" }
 });

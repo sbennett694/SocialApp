@@ -433,6 +433,22 @@ export function seedStoreWithDemoData() {
     }
   );
 
+  const woodVolunteerEvent = {
+    id: "club-event-wood-shop-day",
+    clubId: clubWood.id,
+    title: "Community Shop Cleanup Day",
+    description: "Volunteer hour to clean stations and sort donated clamps.",
+    isAllDay: false,
+    startAt: isoMinutesAgo(12),
+    visibility: "PUBLIC_CLUB",
+    status: "SCHEDULED",
+    createdBy: "alex",
+    createdAt: isoMinutesAgo(22),
+    updatedAt: isoMinutesAgo(22)
+  } satisfies ClubEvent;
+
+  store.clubEvents.push(woodVolunteerEvent);
+
   const feedEvents: FeedEvent[] = [
     {
       id: uuidv4(),
@@ -567,6 +583,64 @@ export function seedStoreWithDemoData() {
       moderationState: "OK",
       isDeleted: false,
       summary: "Task completed on Cedar Planter Box Series"
+    },
+    {
+      id: uuidv4(),
+      eventType: "SUGGESTION_ADDED",
+      contextType: "COMMENT",
+      entityType: "COMMENT",
+      entityId: store.comments[1].id,
+      actorId: "taylor",
+      source: "CLUBS",
+      visibility: "CLUB",
+      clubId: clubWood.id,
+      projectId: projectPlanter.id,
+      createdAt: store.comments[1].createdAt,
+      sortTimestamp: store.comments[1].createdAt,
+      moderationState: "OK",
+      isDeleted: false,
+      summary: "New suggestion added",
+      metadata: {
+        threadType: "SUGGESTIONS",
+        postId: postClubWood.postId
+      }
+    },
+    {
+      id: uuidv4(),
+      eventType: "COMMENT_ADDED",
+      contextType: "COMMENT",
+      entityType: "COMMENT",
+      entityId: store.comments[0].id,
+      actorId: "jamie",
+      source: "CLUBS",
+      visibility: "PUBLIC",
+      clubId: clubWood.id,
+      projectId: projectPlanter.id,
+      createdAt: store.comments[0].createdAt,
+      sortTimestamp: store.comments[0].createdAt,
+      moderationState: "OK",
+      isDeleted: false,
+      summary: "New comment added",
+      metadata: {
+        threadType: "COMMENTS",
+        postId: postProjectPlanter.postId
+      }
+    },
+    {
+      id: uuidv4(),
+      eventType: "CLUB_EVENT_CREATED",
+      contextType: "CLUB_EVENT",
+      entityType: "CLUB_EVENT",
+      entityId: woodVolunteerEvent.id,
+      actorId: "alex",
+      source: "CLUBS",
+      visibility: "PUBLIC",
+      clubId: clubWood.id,
+      createdAt: woodVolunteerEvent.createdAt,
+      sortTimestamp: woodVolunteerEvent.createdAt,
+      moderationState: "OK",
+      isDeleted: false,
+      summary: woodVolunteerEvent.title
     },
     {
       id: uuidv4(),
