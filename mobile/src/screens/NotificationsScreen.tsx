@@ -54,6 +54,7 @@ export function NotificationsScreen({
       ListEmptyComponent={<Text style={styles.hint}>No notifications yet.</Text>}
       renderItem={({ item }) => {
         const unread = !readIds[item.id];
+        const previewLabel = item.previewText ? `Preview: ${item.previewText}` : null;
         return (
           <Pressable
             onPress={() => handlePressNotification(item)}
@@ -64,9 +65,8 @@ export function NotificationsScreen({
               {unread ? <View style={styles.unreadDot} /> : null}
             </View>
             <Text style={styles.body}>{item.message}</Text>
-            <Text style={styles.meta}>
-              {item.relatedType}: {item.relatedId}
-            </Text>
+            {previewLabel ? <Text style={styles.preview}>{previewLabel}</Text> : null}
+            <Text style={styles.meta}>{item.relatedType}</Text>
             <Text style={styles.meta}>{new Date(item.createdAt).toLocaleString()}</Text>
             <Text style={styles.tapHint}>Tap to open</Text>
           </Pressable>
@@ -127,6 +127,11 @@ const styles = StyleSheet.create({
   body: {
     color: "#222",
     marginBottom: 4
+  },
+  preview: {
+    color: "#444",
+    marginBottom: 4,
+    fontStyle: "italic"
   },
   meta: {
     color: "#666",

@@ -60,6 +60,12 @@ type ClubAdminStats = {
   pendingJoinRequestsCount: number;
 };
 
+type ClubStatsSummary = {
+  membersCount: number;
+  pendingJoinRequestsCount: number;
+  totalHighlightsCount: number;
+};
+
 function formatProjectVisibilityLabel(visibility: string): string {
   switch (visibility) {
     case "PUBLIC":
@@ -332,6 +338,31 @@ export function ClubsScreen({
       const joinPolicy = resolveEffectiveJoinPolicy(club);
       if (joinPolicy === "OPEN") {
         await joinClub(club.id, user.userId);
+        if (viewingClub?.id === club.id) {
+          const joinedAt = new Date().toISOString();
+          setClubMembers((current) => {
+            if (current.some((member) => member.clubId === club.id && member.userId === user.userId)) {
+              return current;
+            }
+            return [
+              ...current,
+              {
+                clubId: club.id,
+                userId: user.userId,
+                role: "MEMBER",
+                createdAt: joinedAt
+              }
+            ];
+          });
+          setClubJoinRequestStatus({
+            clubId: club.id,
+            userId: user.userId,
+            status: "APPROVED",
+            createdAt: joinedAt,
+            resolvedAt: joinedAt,
+            resolvedBy: user.userId
+          });
+        }
         setMessage(`Joined ${club.name}`);
       } else if (joinPolicy === "REQUEST_REQUIRED") {
         setPendingJoinRequestClubIds((current) => (current.includes(club.id) ? current : [...current, club.id]));
@@ -350,6 +381,13 @@ export function ClubsScreen({
       }
       loadData();
     } catch (err) {
+      const joinPolicy = resolveEffectiveJoinPolicy(club);
+      if (joinPolicy === "REQUEST_REQUIRED") {
+        setPendingJoinRequestClubIds((current) => current.filter((clubId) => clubId !== club.id));
+        if (viewingClub?.id === club.id) {
+          setClubJoinRequestStatus((current) => (current?.status === "PENDING" ? null : current));
+        }
+      }
       setMessage((err as Error).message);
     }
   }
@@ -866,6 +904,11 @@ export function ClubsScreen({
   const nowTimestamp = Date.now();
   const upcomingClubEvents = sortedClubEvents.filter((event) => new Date(event.startAt).getTime() >= nowTimestamp);
   const pastClubEvents = sortedClubEvents.filter((event) => new Date(event.startAt).getTime() < nowTimestamp);
+  const clubStatsSummary: ClubStatsSummary = {
+    membersCount: clubMembers.length,
+    pendingJoinRequestsCount: clubJoinRequests.length,
+    totalHighlightsCount: detailClubFeed.length
+  };
 
   function toLocalDateKey(rawDate: string): string | null {
     const parsed = new Date(rawDate);
@@ -993,10 +1036,10 @@ export function ClubsScreen({
   }
 
   if (viewingClub) {
-    const isClubMember = !!viewerMembership;
     const isPendingJoinRequest = clubJoinRequestStatus?.status === "PENDING";
     const isApprovedJoinRequest = clubJoinRequestStatus?.status === "APPROVED";
     const isRejectedJoinRequest = clubJoinRequestStatus?.status === "REJECTED";
+    const isClubMember = !!viewerMembership || isApprovedJoinRequest;
 
     return (
       <FlatList
@@ -1043,7 +1086,15 @@ export function ClubsScreen({
 
                 {!canManageClub ? (
                   <View style={styles.joinCtaBox}>
-                    {!isClubMember ? (
+                    {isClubMember ? (
+                      <>
+                        <Text style={styles.joinCtaTitle}>Membership</Text>
+                        <View style={styles.visibilityBadge}>
+                          <Text style={styles.visibilityBadgeText}>Club Member</Text>
+                        </View>
+                        <Text style={styles.joinCtaStatus}>You have access to member-only club spaces.</Text>
+                      </>
+                    ) : (
                       <>
                         <Text style={styles.joinCtaTitle}>Membership</Text>
                         <Text style={styles.joinCtaHint}>Choose how to join this club.</Text>
@@ -1055,10 +1106,10 @@ export function ClubsScreen({
                         {activeJoinPolicy === "REQUEST_REQUIRED" ? (
                           <Pressable
                             onPress={() => handleJoinClub(viewingClub)}
-                            style={styles.buttonInline}
+                            style={[styles.buttonInline, isPendingJoinRequest ? styles.buttonInlineDisabled : null]}
                             disabled={isPendingJoinRequest}
                           >
-                            <Text style={styles.buttonText}>{isPendingJoinRequest ? "Request sent 🤞" : "🥺 Request to Join"}</Text>
+                            <Text style={styles.buttonText}>{isPendingJoinRequest ? "Request Sent 🤞" : "Join Club"}</Text>
                           </Pressable>
                         ) : null}
                         {activeJoinPolicy === "INVITE_ONLY" ? (
@@ -1066,15 +1117,8 @@ export function ClubsScreen({
                             <Text style={styles.visibilityBadgeText}>Invite Only</Text>
                           </View>
                         ) : null}
-                        {isApprovedJoinRequest ? <Text style={styles.joinCtaStatus}>Your request is approved. You can join now.</Text> : null}
+                        {isPendingJoinRequest ? <Text style={styles.joinCtaStatus}>Your join request is pending moderator review.</Text> : null}
                         {isRejectedJoinRequest ? <Text style={styles.joinCtaStatus}>Your last request was rejected.</Text> : null}
-                      </>
-                    ) : (
-                      <>
-                        <Text style={styles.joinCtaTitle}>Membership</Text>
-                        <View style={styles.visibilityBadge}>
-                          <Text style={styles.visibilityBadgeText}>You are a member</Text>
-                        </View>
                       </>
                     )}
                   </View>
@@ -1547,65 +1591,100 @@ export function ClubsScreen({
                 <Pressable style={StyleSheet.absoluteFill} onPress={() => setAdminPanelOpen(false)} />
                 <View style={styles.modalCard}>
                   <Text style={styles.sectionTitle}>Club Admin Panel</Text>
-                  <Text style={styles.hint}>Owner/admin tools for this club.</Text>
+                  <Text style={styles.hint}>Owner/admin tools for membership, requests, and club settings.</Text>
 
-                  <Text style={styles.filterLabel}>Club Visibility</Text>
-                  <View style={styles.rowWrap}>
-                    <Pressable
-                      onPress={() => handleSetClubVisibility(true)}
-                      style={[styles.pill, viewingClub.isPublic !== false && styles.pillActive]}
-                    >
-                      <Text style={[styles.pillText, viewingClub.isPublic !== false && styles.pillTextActive]}>Public</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => handleSetClubVisibility(false)}
-                      style={[styles.pill, viewingClub.isPublic === false && styles.pillActive]}
-                    >
-                      <Text style={[styles.pillText, viewingClub.isPublic === false && styles.pillTextActive]}>Private</Text>
-                    </Pressable>
-                  </View>
-
-                  <Text style={styles.filterLabel}>Join Rules</Text>
-                  <View style={styles.rowWrap}>
-                    {(["OPEN", "REQUEST_REQUIRED", "INVITE_ONLY"] as ClubJoinPolicy[]).map((policy) => {
-                      const active = activeJoinPolicy === policy;
-                      return (
-                        <Pressable key={`admin-join-rule-${policy}`} onPress={() => handleSetJoinPolicy(policy)} style={[styles.pill, active && styles.pillActive]}>
-                          <Text style={[styles.pillText, active && styles.pillTextActive]}>{formatJoinPolicyLabel(policy)}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  <Text style={styles.filterLabel}>Join Requests</Text>
-                  <ScrollView style={{ maxHeight: 220 }}>
-                    {clubJoinRequests.length === 0 ? <Text style={styles.hint}>No pending join requests.</Text> : null}
-                    {clubJoinRequests.map((request) => (
-                      <View key={`admin-join-request-${request.clubId}-${request.userId}`} style={styles.card}>
-                        <Text style={styles.clubName}>@{request.userId}</Text>
-                        <Text style={styles.hint}>Requested: {new Date(request.createdAt).toLocaleString()}</Text>
-                        <View style={styles.rowWrap}>
-                          <Pressable onPress={() => handleReviewJoinRequest(request.userId, "APPROVED")} style={styles.buttonInline}>
-                            <Text style={styles.buttonText}>Approve</Text>
-                          </Pressable>
-                          <Pressable onPress={() => handleReviewJoinRequest(request.userId, "REJECTED")} style={styles.buttonInline}>
-                            <Text style={styles.buttonText}>Reject</Text>
-                          </Pressable>
-                        </View>
+                  <View style={styles.adminHeroCard}>
+                    <Text style={styles.adminHeroTitle}>{viewingClub.name}</Text>
+                    <Text style={styles.adminHeroSubtitle}>Manage club access, review requests, and keep tabs on activity.</Text>
+                    <View style={styles.adminStatsGrid}>
+                      <View style={styles.adminStatCard}>
+                        <Text style={styles.adminStatValue}>{clubStatsSummary.membersCount}</Text>
+                        <Text style={styles.adminStatLabel}>Members</Text>
                       </View>
-                    ))}
-                  </ScrollView>
+                      <View style={styles.adminStatCard}>
+                        <Text style={styles.adminStatValue}>{clubStatsSummary.pendingJoinRequestsCount}</Text>
+                        <Text style={styles.adminStatLabel}>Pending Requests</Text>
+                      </View>
+                      <View style={styles.adminStatCard}>
+                        <Text style={styles.adminStatValue}>{clubStatsSummary.totalHighlightsCount}</Text>
+                        <Text style={styles.adminStatLabel}>Posts / Highlights</Text>
+                      </View>
+                    </View>
+                  </View>
 
-                  <Text style={styles.filterLabel}>Other Admin Tools</Text>
-                  <Pressable
-                    onPress={() => {
-                      setAdminPanelOpen(false);
-                      setClubDetailTab("PROJECT_REQUESTS");
-                    }}
-                    style={styles.buttonInline}
-                  >
-                    <Text style={styles.buttonText}>Open Project Requests</Text>
-                  </Pressable>
+                  <View style={styles.adminSectionCard}>
+                    <Text style={styles.filterLabel}>Club Visibility</Text>
+                    <Text style={styles.hint}>Control whether the club appears as public or private.</Text>
+                    <View style={styles.rowWrap}>
+                      <Pressable
+                        onPress={() => handleSetClubVisibility(true)}
+                        style={[styles.pill, viewingClub.isPublic !== false && styles.pillActive]}
+                      >
+                        <Text style={[styles.pillText, viewingClub.isPublic !== false && styles.pillTextActive]}>Public</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => handleSetClubVisibility(false)}
+                        style={[styles.pill, viewingClub.isPublic === false && styles.pillActive]}
+                      >
+                        <Text style={[styles.pillText, viewingClub.isPublic === false && styles.pillTextActive]}>Private</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+
+                  <View style={styles.adminSectionCard}>
+                    <Text style={styles.filterLabel}>Join Rules</Text>
+                    <Text style={styles.hint}>Choose whether members can join instantly or require moderator approval.</Text>
+                    <View style={styles.rowWrap}>
+                      {(["OPEN", "REQUEST_REQUIRED", "INVITE_ONLY"] as ClubJoinPolicy[]).map((policy) => {
+                        const active = activeJoinPolicy === policy;
+                        return (
+                          <Pressable key={`admin-join-rule-${policy}`} onPress={() => handleSetJoinPolicy(policy)} style={[styles.pill, active && styles.pillActive]}>
+                            <Text style={[styles.pillText, active && styles.pillTextActive]}>{formatJoinPolicyLabel(policy)}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  <View style={styles.adminSectionCard}>
+                    <Text style={styles.filterLabel}>Join Requests</Text>
+                    <Text style={styles.hint}>Approve or reject people waiting to join this club.</Text>
+                    <ScrollView style={{ maxHeight: 220 }}>
+                      {clubJoinRequests.length === 0 ? <Text style={styles.hint}>No pending join requests.</Text> : null}
+                      {clubJoinRequests.map((request) => (
+                        <View key={`admin-join-request-${request.clubId}-${request.userId}`} style={styles.adminRequestCard}>
+                          <View style={styles.adminRequestHeader}>
+                            <Text style={styles.clubName}>@{request.userId}</Text>
+                            <View style={styles.visibilityBadge}>
+                              <Text style={styles.visibilityBadgeText}>Pending</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.hint}>Requested: {new Date(request.createdAt).toLocaleString()}</Text>
+                          <View style={styles.rowWrap}>
+                            <Pressable onPress={() => handleReviewJoinRequest(request.userId, "APPROVED")} style={styles.buttonInlineStrong}>
+                              <Text style={styles.buttonTextInverse}>Approve</Text>
+                            </Pressable>
+                            <Pressable onPress={() => handleReviewJoinRequest(request.userId, "REJECTED")} style={styles.buttonInline}>
+                              <Text style={styles.buttonText}>Reject</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+
+                  <View style={styles.adminSectionCard}>
+                    <Text style={styles.filterLabel}>Quick Actions</Text>
+                    <Pressable
+                      onPress={() => {
+                        setAdminPanelOpen(false);
+                        setClubDetailTab("PROJECT_REQUESTS");
+                      }}
+                      style={styles.buttonInline}
+                    >
+                      <Text style={styles.buttonText}>Open Project Requests</Text>
+                    </Pressable>
+                  </View>
 
                   <View style={styles.rowWrap}>
                     <Pressable onPress={() => setAdminPanelOpen(false)} style={styles.buttonInline}>
@@ -1819,8 +1898,8 @@ export function ClubsScreen({
                   <Text style={styles.buttonText}>
                     {resolveEffectiveJoinPolicy(item) === "REQUEST_REQUIRED"
                       ? pendingJoinRequestClubIds.includes(item.id)
-                        ? "Request sent 🤞"
-                        : "🥺 Request to Join"
+                        ? "Request Sent 🤞"
+                        : "Join Club"
                       : "Join Club"}
                   </Text>
                 </Pressable>
@@ -2112,6 +2191,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     alignItems: "center"
   },
+  buttonInlineDisabled: {
+    opacity: 0.6,
+    backgroundColor: "#f1f1f1"
+  },
+  buttonInlineStrong: {
+    borderWidth: 1,
+    borderColor: "#111",
+    backgroundColor: "#111",
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: "center"
+  },
+  buttonTextInverse: {
+    fontWeight: "600",
+    color: "#fff"
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -2211,6 +2307,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#555",
     marginTop: 6
+  },
+  adminHeroCard: {
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: "#f6f9ff",
+    borderWidth: 1,
+    borderColor: "#d8e4ff"
+  },
+  adminHeroTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1b2a57",
+    marginBottom: 4
+  },
+  adminHeroSubtitle: {
+    color: "#51607f",
+    marginBottom: 10
+  },
+  adminStatsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  adminStatCard: {
+    minWidth: 96,
+    flexGrow: 1,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#d8e4ff",
+    paddingVertical: 10,
+    paddingHorizontal: 12
+  },
+  adminStatValue: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111"
+  },
+  adminStatLabel: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#5f6b84",
+    fontWeight: "600"
+  },
+  adminSectionCard: {
+    borderWidth: 1,
+    borderColor: "#e4e7ee",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+    backgroundColor: "#fcfcfd"
+  },
+  adminRequestCard: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+    backgroundColor: "#fff"
+  },
+  adminRequestHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
   },
   focusedTargetCard: {
     borderColor: "#9bb8f5",

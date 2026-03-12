@@ -21,6 +21,12 @@ import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 type MainTab = "HOME" | "COMMONS" | "NOTIFICATIONS" | "CLUBS" | "PROJECTS" | "PROFILE";
 type DetailNavigationTarget = "COMMONS" | "CLUBS" | "PROJECTS";
 type FocusItemType = "POST" | "MILESTONE" | "TASK";
+type ProjectsNavigationIntent = {
+  requestId: string;
+  projectId: string;
+  targetId?: string;
+  targetType?: Extract<FocusItemType, "MILESTONE" | "TASK">;
+};
 
 export default function App() {
   const isDevBuild = typeof __DEV__ !== "undefined" && __DEV__;
@@ -34,9 +40,7 @@ export default function App() {
   const [profileFocusUserId, setProfileFocusUserId] = useState<string | undefined>(undefined);
   const [clubsFocusClubId, setClubsFocusClubId] = useState<string | undefined>(undefined);
   const [clubsFocusPostId, setClubsFocusPostId] = useState<string | undefined>(undefined);
-  const [projectsFocusProjectId, setProjectsFocusProjectId] = useState<string | undefined>(undefined);
-  const [projectsFocusItemId, setProjectsFocusItemId] = useState<string | undefined>(undefined);
-  const [projectsFocusItemType, setProjectsFocusItemType] = useState<Extract<FocusItemType, "MILESTONE" | "TASK"> | undefined>(undefined);
+  const [projectsNavigationIntent, setProjectsNavigationIntent] = useState<ProjectsNavigationIntent | undefined>(undefined);
   const [commonsFocusPostId, setCommonsFocusPostId] = useState<string | undefined>(undefined);
   const [commonsFocusCommentId, setCommonsFocusCommentId] = useState<string | undefined>(undefined);
   const [commonsFocusThreadType, setCommonsFocusThreadType] = useState<ThreadType | undefined>(undefined);
@@ -53,6 +57,19 @@ export default function App() {
 
   const user = getCurrentUser(selectedMockUserId);
   const unreadNotificationsCount = notifications.filter((item) => !notificationReadIds[item.id]).length;
+
+  function createProjectsNavigationIntent(
+    projectId: string,
+    targetId?: string,
+    targetType?: Extract<FocusItemType, "MILESTONE" | "TASK">
+  ): ProjectsNavigationIntent {
+    return {
+      requestId: `projects-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      projectId,
+      targetId,
+      targetType
+    };
+  }
 
   useEffect(() => {
     getUsers()
@@ -141,9 +158,7 @@ export default function App() {
       setClubsFocusPostId(undefined);
       setActiveTab("CLUBS");
     } else {
-      setProjectsFocusProjectId(id);
-      setProjectsFocusItemId(undefined);
-      setProjectsFocusItemType(undefined);
+      setProjectsNavigationIntent(createProjectsNavigationIntent(id));
       setActiveTab("PROJECTS");
     }
     setSearchOpen(false);
@@ -151,13 +166,17 @@ export default function App() {
 
   function handleOpenNotification(item: NotificationItem) {
     if (item.relatedType === "PROJECT") {
-      setProjectsFocusProjectId(item.projectId ?? item.relatedId);
+      const projectId = item.projectId ?? item.relatedId;
       if (item.type === "PROJECT_MILESTONE_COMPLETED" || item.type === "PROJECT_TASK_COMPLETED") {
-        setProjectsFocusItemId(item.entityId);
-        setProjectsFocusItemType(item.type === "PROJECT_MILESTONE_COMPLETED" ? "MILESTONE" : "TASK");
+        setProjectsNavigationIntent(
+          createProjectsNavigationIntent(
+            projectId,
+            item.entityId,
+            item.type === "PROJECT_MILESTONE_COMPLETED" ? "MILESTONE" : "TASK"
+          )
+        );
       } else {
-        setProjectsFocusItemId(undefined);
-        setProjectsFocusItemType(undefined);
+        setProjectsNavigationIntent(createProjectsNavigationIntent(projectId));
       }
       setActiveTab("PROJECTS");
       return;
@@ -211,12 +230,10 @@ export default function App() {
 
     if (target === "PROJECTS") {
       if (id) {
-        setProjectsFocusProjectId(id);
+        setProjectsNavigationIntent(createProjectsNavigationIntent(id));
       } else {
-        setProjectsFocusProjectId(undefined);
+        setProjectsNavigationIntent(undefined);
       }
-      setProjectsFocusItemId(undefined);
-      setProjectsFocusItemType(undefined);
       setActiveTab("PROJECTS");
       return;
     }
@@ -249,17 +266,18 @@ export default function App() {
     }
 
     if (target === "PROJECTS") {
-      if (options?.projectId) {
-        setProjectsFocusProjectId(options.projectId);
-      } else {
-        setProjectsFocusProjectId(undefined);
-      }
       if (options?.focusItemType === "MILESTONE" || options?.focusItemType === "TASK") {
-        setProjectsFocusItemId(options.focusItemId);
-        setProjectsFocusItemType(options.focusItemType);
+        if (options?.projectId) {
+          setProjectsNavigationIntent(
+            createProjectsNavigationIntent(options.projectId, options.focusItemId, options.focusItemType)
+          );
+        } else {
+          setProjectsNavigationIntent(undefined);
+        }
       } else {
-        setProjectsFocusItemId(undefined);
-        setProjectsFocusItemType(undefined);
+        setProjectsNavigationIntent(
+          options?.projectId ? createProjectsNavigationIntent(options.projectId) : undefined
+        );
       }
       setActiveTab("PROJECTS");
       return;
@@ -342,9 +360,7 @@ export default function App() {
                   setClubsRootResetSignal((value) => value + 1);
                 }
                 if (tab === "PROJECTS" && activeTab === "PROJECTS") {
-                  setProjectsFocusProjectId(undefined);
-                  setProjectsFocusItemId(undefined);
-                  setProjectsFocusItemType(undefined);
+                  setProjectsNavigationIntent(undefined);
                   setProjectsRootResetSignal((value) => value + 1);
                 }
                 setActiveTab(tab);
@@ -479,6 +495,7 @@ export default function App() {
           notificationsLoading={notificationsLoading}
           onRefreshNotifications={loadNotifications}
           onMarkNotificationRead={markNotificationRead}
+          onOpenNotification={handleOpenNotification}
           onNavigate={handleHomeNavigate}
         />
       ) : null}
@@ -503,13 +520,20 @@ export default function App() {
           }}
           onNavigate={(target, options) => {
             if (target === "PROJECTS") {
-              setProjectsFocusProjectId(options?.projectId);
+              setProjectsNavigationIntent(
+                options?.projectId
+                  ? createProjectsNavigationIntent(
+                      options.projectId,
+                      options?.focusItemType === "MILESTONE" || options?.focusItemType === "TASK"
+                        ? options.focusItemId
+                        : undefined,
+                      options?.focusItemType === "MILESTONE" || options?.focusItemType === "TASK"
+                        ? options.focusItemType
+                        : undefined
+                    )
+                  : undefined
+              );
               if (options?.focusItemType === "MILESTONE" || options?.focusItemType === "TASK") {
-                setProjectsFocusItemId(options.focusItemId);
-                setProjectsFocusItemType(options.focusItemType);
-              } else {
-                setProjectsFocusItemId(undefined);
-                setProjectsFocusItemType(undefined);
               }
               setActiveTab("PROJECTS");
               return;
@@ -549,9 +573,7 @@ export default function App() {
             setClubsFocusPostId(undefined);
           }}
           onNavigateToProject={(projectId) => {
-            setProjectsFocusProjectId(projectId);
-            setProjectsFocusItemId(undefined);
-            setProjectsFocusItemType(undefined);
+            setProjectsNavigationIntent(createProjectsNavigationIntent(projectId));
             setActiveTab("PROJECTS");
           }}
         />
@@ -559,21 +581,13 @@ export default function App() {
       {activeTab === "PROJECTS" ? (
         <ProjectsScreen
           user={user}
-          focusProjectId={projectsFocusProjectId}
-          focusItemId={projectsFocusItemId}
-          focusItemType={projectsFocusItemType}
+          navigationIntent={projectsNavigationIntent}
           rootResetSignal={projectsRootResetSignal}
-          onFocusProjectConsumed={(projectId) => {
-            setProjectsFocusProjectId((current) => (current === projectId ? undefined : current));
-          }}
-          onFocusItemConsumed={(itemId, itemType) => {
-            setProjectsFocusItemId((current) => (current === itemId ? undefined : current));
-            setProjectsFocusItemType((current) => (current === itemType ? undefined : current));
+          onNavigationIntentComplete={(requestId) => {
+            setProjectsNavigationIntent((current) => (current?.requestId === requestId ? undefined : current));
           }}
           onBackToProjectsRoot={() => {
-            setProjectsFocusProjectId(undefined);
-            setProjectsFocusItemId(undefined);
-            setProjectsFocusItemType(undefined);
+            setProjectsNavigationIntent(undefined);
           }}
           onNavigateToClub={(clubId) => {
             setClubsFocusClubId(clubId);

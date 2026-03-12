@@ -167,6 +167,7 @@ export type NotificationItem = {
   type: NotificationType;
   actorId: string;
   message: string;
+  previewText?: string;
   relatedType: "POST" | "PROJECT" | "CLUB";
   relatedId: string;
   entityId?: string;

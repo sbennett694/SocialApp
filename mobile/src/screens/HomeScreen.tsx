@@ -25,6 +25,7 @@ type HomeScreenProps = {
   notificationsLoading: boolean;
   onRefreshNotifications: () => Promise<void> | void;
   onMarkNotificationRead: (notificationId: string) => void;
+  onOpenNotification: (item: NotificationItem) => void;
   onNavigate: (
     target: HomeNavigationTarget,
     options?: {
@@ -93,6 +94,7 @@ export function HomeScreen({
   notificationsLoading,
   onRefreshNotifications,
   onMarkNotificationRead,
+  onOpenNotification,
   onNavigate
 }: HomeScreenProps) {
   const [loading, setLoading] = useState(true);
@@ -439,11 +441,12 @@ export function HomeScreen({
                   key={item.id}
                   onPress={() => {
                     onMarkNotificationRead(item.id);
-                    onNavigate("NOTIFICATIONS");
+                    onOpenNotification(item);
                   }}
                   style={[styles.itemCard, unread && styles.unreadCard]}
                 >
                   <Text style={styles.itemTitle}>{item.message}</Text>
+                  {item.previewText ? <Text style={styles.itemBody}>Preview: {item.previewText}</Text> : null}
                   <Text style={styles.itemMeta}>{new Date(item.createdAt).toLocaleString()}</Text>
                 </Pressable>
               );

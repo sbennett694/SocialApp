@@ -38,12 +38,14 @@ type MilestoneVisualState = "COMPLETED" | "IN_PROGRESS" | "FUTURE";
 
 type ProjectsScreenProps = {
   user: AuthUser;
-  focusProjectId?: string;
-  focusItemId?: string;
-  focusItemType?: "MILESTONE" | "TASK";
+  navigationIntent?: {
+    requestId: string;
+    projectId: string;
+    targetId?: string;
+    targetType?: "MILESTONE" | "TASK";
+  };
   rootResetSignal?: number;
-  onFocusProjectConsumed?: (projectId: string) => void;
-  onFocusItemConsumed?: (itemId: string, itemType: "MILESTONE" | "TASK") => void;
+  onNavigationIntentComplete?: (requestId: string) => void;
   onBackToProjectsRoot?: () => void;
   onNavigateToClub?: (clubId: string) => void;
 };
@@ -59,12 +61,9 @@ type TaskTimeSummary = {
 
 export function ProjectsScreen({
   user,
-  focusProjectId,
-  focusItemId,
-  focusItemType,
+  navigationIntent,
   rootResetSignal = 0,
-  onFocusProjectConsumed,
-  onFocusItemConsumed,
+  onNavigationIntentComplete,
   onBackToProjectsRoot,
   onNavigateToClub
 }: ProjectsScreenProps) {
@@ -135,7 +134,7 @@ export function ProjectsScreen({
   const [addTimeNote, setAddTimeNote] = useState("");
   const [timeLogModalOpen, setTimeLogModalOpen] = useState(false);
   const [timeLogTarget, setTimeLogTarget] = useState<{ milestoneId: string; taskId: string; taskText: string } | null>(null);
-  const [pendingFocusItem, setPendingFocusItem] = useState<{ id: string; type: "MILESTONE" | "TASK" } | null>(null);
+  const [pendingFocusItem, setPendingFocusItem] = useState<{ id: string; type: "MILESTONE" | "TASK"; requestId?: string } | null>(null);
 
   const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories]);
 
@@ -267,22 +266,32 @@ export function ProjectsScreen({
   }, [user.userId]);
 
   useEffect(() => {
-    if (!focusItemId || !focusItemType) return;
-    logFocusDebug("incoming focus item", { focusItemId, focusItemType });
-    setPendingFocusItem({ id: focusItemId, type: focusItemType });
-  }, [focusItemId, focusItemType]);
-
-  useEffect(() => {
-    if (!focusProjectId || projects.length === 0) return;
-    const target = projects.find((project) => project.id === focusProjectId);
+    if (!navigationIntent?.projectId || projects.length === 0) return;
+    const target = projects.find((project) => project.id === navigationIntent.projectId);
     if (!target) return;
     if (selectedProject?.id === target.id) return;
-    if (!focusItemId || !focusItemType) {
-      triggerProjectHighlight(target.id);
-    }
-    onFocusProjectConsumed?.(target.id);
     void openProject(target);
-  }, [focusProjectId, focusItemId, focusItemType, onFocusProjectConsumed, projects, selectedProject?.id]);
+  }, [navigationIntent?.projectId, projects, selectedProject?.id]);
+
+  useEffect(() => {
+    if (!navigationIntent?.projectId || projects.length === 0) return;
+    const target = projects.find((project) => project.id === navigationIntent.projectId);
+    if (!target) return;
+    if (selectedProject?.id !== target.id) return;
+
+    if (!navigationIntent.targetId || !navigationIntent.targetType) {
+      triggerProjectHighlight(target.id);
+      onNavigationIntentComplete?.(navigationIntent.requestId);
+      return;
+    }
+
+    logFocusDebug("incoming navigation intent target", navigationIntent);
+    setPendingFocusItem({
+      id: navigationIntent.targetId,
+      type: navigationIntent.targetType,
+      requestId: navigationIntent.requestId
+    });
+  }, [navigationIntent, onNavigationIntentComplete, projects, selectedProject?.id, triggerProjectHighlight]);
 
   useEffect(() => {
     if (!selectedProject || !pendingFocusItem) return;
@@ -323,7 +332,9 @@ export function ProjectsScreen({
         logFocusDebug("triggering nested highlight", key);
         triggerNestedItemHighlight(key);
       }, 260);
-      onFocusItemConsumed?.(pendingFocusItem.id, pendingFocusItem.type);
+      if (pendingFocusItem.requestId) {
+        onNavigationIntentComplete?.(pendingFocusItem.requestId);
+      }
       setPendingFocusItem(null);
     };
 
@@ -368,7 +379,7 @@ export function ProjectsScreen({
 
     scrollToTargetWhenReady();
   }, [
-    onFocusItemConsumed,
+    onNavigationIntentComplete,
     orderedMilestones,
     pendingFocusItem,
     projectTab,

@@ -25,6 +25,7 @@ import {
   Visibility
 } from "../../domain/types";
 import { evaluateText } from "../../lib/moderationEngine";
+import { buildNotificationPreviewText } from "../../lib/notificationPreview";
 import {
   GlobalSearchResult,
   LocalPost as Post,
@@ -756,6 +757,7 @@ router.get("/notifications", (req, res) => {
 
   const viewerPostIds = new Set(posts.filter((post) => post.userId === viewerId).map((post) => post.postId));
   const viewerProjectIds = new Set(projects.filter((project) => project.ownerId === viewerId).map((project) => project.id));
+  const postById = new Map(posts.map((post) => [post.postId, post]));
 
   const notificationItems: Array<{
     id: string;
@@ -774,6 +776,7 @@ router.get("/notifications", (req, res) => {
     message: string;
     relatedType: "POST" | "PROJECT" | "CLUB";
     relatedId: string;
+    previewText?: string;
     entityId?: string;
     threadType?: ThreadType;
     postId?: string;
@@ -792,6 +795,7 @@ router.get("/notifications", (req, res) => {
         message: `@${comment.authorId} commented on your post`,
         relatedType: "POST",
         relatedId: comment.postId,
+        previewText: buildNotificationPreviewText(comment.textContent),
         entityId: comment.id,
         threadType: comment.threadType,
         postId: comment.postId,
@@ -802,6 +806,7 @@ router.get("/notifications", (req, res) => {
   reactions
     .filter((reaction) => viewerPostIds.has(reaction.postId) && reaction.userId !== viewerId)
     .forEach((reaction) => {
+      const relatedPost = postById.get(reaction.postId);
       notificationItems.push({
         id: `reaction:${reaction.postId}:${reaction.userId}:${reaction.createdAt}`,
         type: "POST_REACTED",
@@ -809,6 +814,7 @@ router.get("/notifications", (req, res) => {
         message: `@${reaction.userId} reacted to your post`,
         relatedType: "POST",
         relatedId: reaction.postId,
+        previewText: buildNotificationPreviewText(relatedPost?.text),
         postId: reaction.postId,
         createdAt: reaction.createdAt
       });

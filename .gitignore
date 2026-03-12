@@ -6,12 +6,11 @@ dist/
 build/
 coverage/
 .expo/
+.expo-shared/
 .cache/
 .tmp/
 tmp/
 *.tsbuildinfo
-*.map
-*.min.js
 
 # ===== Logs =====
 logs/
@@ -33,9 +32,15 @@ backend/.env.*
 # ===== OS / editor noise =====
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
 
 # ===== Test/runtime output =====
 *.lcov
+
+# ===== Databases =====
+*.sqlite
+*.db
 
 # ===== AWS SAM / local cloud artifacts =====
 .aws-sam/
@@ -43,15 +48,16 @@ Thumbs.db
 
 # ===== Local tool state =====
 .cline/
-
-# Claude Code workspace
 .claude/
-
-# Claude worktrees
 .claude/worktrees/
-
-# Dev runtime state
 scripts/.devstate/*.pid
 
-.claude/
-scripts/.devstate/*.pid
+# ===== Private product strategy / AI workflow =====
+Task Folders/
+docs/Philosophy/
+docs/Product/
+docs/strategy/
+docs/private/
+
+# ===== Local notes =====
+*.local.md
