@@ -50,6 +50,27 @@ export type ClubCommonsFeedQueryResult = {
   nextCursor?: FeedCursor;
 };
 
+export type ProjectTimelineActivityType =
+  | "project_created"
+  | "highlight"
+  | "milestone_completed"
+  | "task_completed"
+  | "comment"
+  | "question"
+  | "suggestion"
+  | "gratitude";
+
+export type ProjectTimelineItem = {
+  id: string;
+  projectId: string;
+  actorId: string;
+  createdAt: string;
+  activityType: ProjectTimelineActivityType;
+  entityType: FeedEvent["entityType"];
+  entityId: string;
+  description: string;
+};
+
 function compareFeedEventsDesc(a: FeedEvent, b: FeedEvent): number {
   if (a.sortTimestamp === b.sortTimestamp) {
     return b.id.localeCompare(a.id);
@@ -242,6 +263,97 @@ function mapClubFeedEventToItem(event: FeedEvent): ClubCommonsFeedItem | null {
   }
 }
 
+function mapProjectTimelineEventToItem(event: FeedEvent): ProjectTimelineItem | null {
+  if (!event.projectId) return null;
+
+  switch (event.eventType) {
+    case "PROJECT_CREATED": {
+      const project = store.projects.find((item) => item.id === event.projectId);
+      return {
+        id: event.id,
+        projectId: event.projectId,
+        actorId: event.actorId,
+        createdAt: event.sortTimestamp,
+        activityType: "project_created",
+        entityType: event.entityType,
+        entityId: event.entityId,
+        description: project ? `Project created: ${project.title}` : event.summary ?? "Project created"
+      };
+    }
+    case "PROJECT_HIGHLIGHT_CREATED": {
+      const highlight = store.projectHighlights.find((item) => item.id === event.entityId);
+      return {
+        id: event.id,
+        projectId: event.projectId,
+        actorId: event.actorId,
+        createdAt: event.sortTimestamp,
+        activityType: "highlight",
+        entityType: event.entityType,
+        entityId: event.entityId,
+        description: highlight ? `Highlight: ${highlight.text}` : event.summary ?? "Project highlight"
+      };
+    }
+    case "MILESTONE_COMPLETED": {
+      const milestone = store.projectMilestones.find((item) => item.id === event.entityId);
+      return {
+        id: event.id,
+        projectId: event.projectId,
+        actorId: event.actorId,
+        createdAt: event.sortTimestamp,
+        activityType: "milestone_completed",
+        entityType: event.entityType,
+        entityId: event.entityId,
+        description: milestone ? `Milestone completed: ${milestone.title}` : event.summary ?? "Milestone completed"
+      };
+    }
+    case "TASK_COMPLETED": {
+      const taskText = findTaskText(event.entityId);
+      return {
+        id: event.id,
+        projectId: event.projectId,
+        actorId: event.actorId,
+        createdAt: event.sortTimestamp,
+        activityType: "task_completed",
+        entityType: event.entityType,
+        entityId: event.entityId,
+        description: taskText ? `Task completed: ${taskText}` : event.summary ?? "Task completed"
+      };
+    }
+    case "COMMENT_ADDED":
+    case "QUESTION_ADDED":
+    case "SUGGESTION_ADDED":
+    case "GRATITUDE_ADDED": {
+      const comment = store.comments.find((item) => item.id === event.entityId);
+      const timelineTypeByEvent = {
+        COMMENT_ADDED: "comment",
+        QUESTION_ADDED: "question",
+        SUGGESTION_ADDED: "suggestion",
+        GRATITUDE_ADDED: "gratitude"
+      } as const;
+      const prefixByEvent = {
+        COMMENT_ADDED: "Commented",
+        QUESTION_ADDED: "Question",
+        SUGGESTION_ADDED: "Suggestion",
+        GRATITUDE_ADDED: "Gratitude"
+      } as const;
+      return {
+        id: event.id,
+        projectId: event.projectId,
+        actorId: event.actorId,
+        createdAt: event.sortTimestamp,
+        activityType: timelineTypeByEvent[event.eventType],
+        entityType: event.entityType,
+        entityId: event.entityId,
+        description: comment?.textContent
+          ? `${prefixByEvent[event.eventType]}: ${comment.textContent}`
+          : event.summary ?? prefixByEvent[event.eventType]
+      };
+    }
+    default:
+      return null;
+  }
+}
+
 export const feedQueryService = {
   queryCommonsFeed(input: CommonsFeedQueryInput): CommonsFeedQueryResult {
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 50);
@@ -413,5 +525,17 @@ export const feedQueryService = {
       items: visibleItems,
       nextCursor: encodeCursor(clubEvents[visibleItems.length - 1])
     };
+  },
+
+  queryProjectTimeline(input: { viewerId: string; projectId: string; limit?: number }): ProjectTimelineItem[] {
+    const events = this.queryCommonsFeed({
+      viewerId: input.viewerId,
+      filters: { projectId: input.projectId },
+      limit: Math.min(Math.max(input.limit ?? 50, 1), 100)
+    }).events;
+
+    return events
+      .map(mapProjectTimelineEventToItem)
+      .filter((item): item is ProjectTimelineItem => !!item);
   }
 };

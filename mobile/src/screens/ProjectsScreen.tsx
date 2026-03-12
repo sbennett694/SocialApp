@@ -8,8 +8,10 @@ import {
   createProjectHighlight,
   createProjectMilestone,
   createProjectMilestoneTask,
+  FeedEvent,
   getCategories,
   getClubMembers,
+  getCommonsFeedEvents,
   getProjectClubLinks,
   getProjects,
   getProjectHighlights,
@@ -59,6 +61,15 @@ type TaskTimeSummary = {
   taskTotalMinutes: number;
 };
 
+type TimelineDisplayItem = {
+  id: string;
+  icon: string;
+  label: string;
+  actorId: string;
+  createdAt: string;
+  description: string;
+};
+
 export function ProjectsScreen({
   user,
   navigationIntent,
@@ -103,9 +114,10 @@ export function ProjectsScreen({
   const [createVisibility, setCreateVisibility] = useState<ProjectVisibility>("PUBLIC");
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [projectTab, setProjectTab] = useState<"HIGHLIGHTS" | "MILESTONES">("HIGHLIGHTS");
+  const [projectTab, setProjectTab] = useState<"HIGHLIGHTS" | "MILESTONES" | "TIMELINE">("HIGHLIGHTS");
   const [projectHighlights, setProjectHighlights] = useState<ProjectHighlight[]>([]);
   const [projectMilestones, setProjectMilestones] = useState<ProjectMilestone[]>([]);
+  const [projectTimelineEvents, setProjectTimelineEvents] = useState<FeedEvent[]>([]);
   const [projectClubLinks, setProjectClubLinks] = useState<ProjectClubLink[]>([]);
   const [projectDetailLoading, setProjectDetailLoading] = useState(false);
   const [newHighlightText, setNewHighlightText] = useState("");
@@ -158,6 +170,88 @@ export function ProjectsScreen({
     () => Array.from(new Set([...projects.map((project) => project.categoryId), ...myClubs.map((club) => club.categoryId)])),
     [projects, myClubs]
   );
+
+  const timelineItems = useMemo<TimelineDisplayItem[]>(() => {
+    return projectTimelineEvents.map((event) => {
+      switch (event.eventType) {
+        case "PROJECT_CREATED": {
+          return {
+            id: event.id,
+            icon: "🚀",
+            label: "Project Created",
+            actorId: event.actorId,
+            createdAt: event.sortTimestamp,
+            description: selectedProject ? `Created project '${selectedProject.title}'` : "Created project"
+          };
+        }
+        case "PROJECT_HIGHLIGHT_CREATED": {
+          const highlight = projectHighlights.find((item) => item.id === event.entityId);
+          return {
+            id: event.id,
+            icon: "✨",
+            label: "Highlight",
+            actorId: event.actorId,
+            createdAt: event.sortTimestamp,
+            description: highlight?.text ?? "Posted a project highlight"
+          };
+        }
+        case "MILESTONE_COMPLETED": {
+          const milestone = projectMilestones.find((item) => item.id === event.entityId);
+          return {
+            id: event.id,
+            icon: "🏁",
+            label: "Milestone Completed",
+            actorId: event.actorId,
+            createdAt: event.sortTimestamp,
+            description: milestone ? milestone.title : "Completed a milestone"
+          };
+        }
+        case "TASK_COMPLETED": {
+          const taskText = projectMilestones
+            .flatMap((milestone) => milestone.tasks ?? [])
+            .find((task) => task.id === event.entityId)?.text;
+          return {
+            id: event.id,
+            icon: "✅",
+            label: "Task Completed",
+            actorId: event.actorId,
+            createdAt: event.sortTimestamp,
+            description: taskText ?? "Completed a task"
+          };
+        }
+        case "COMMENT_ADDED":
+        case "QUESTION_ADDED":
+        case "SUGGESTION_ADDED":
+        case "GRATITUDE_ADDED": {
+          const activityMap = {
+            COMMENT_ADDED: { icon: "💬", label: "Comment" },
+            QUESTION_ADDED: { icon: "❓", label: "Question" },
+            SUGGESTION_ADDED: { icon: "💡", label: "Suggestion" },
+            GRATITUDE_ADDED: { icon: "🙏", label: "Gratitude" }
+          } as const;
+          const match = activityMap[event.eventType];
+          const text = typeof event.summary === "string" && event.summary.trim() ? event.summary : "Added to the project discussion";
+          return {
+            id: event.id,
+            icon: match.icon,
+            label: match.label,
+            actorId: event.actorId,
+            createdAt: event.sortTimestamp,
+            description: text
+          };
+        }
+        default:
+          return {
+            id: event.id,
+            icon: "📝",
+            label: event.eventType,
+            actorId: event.actorId,
+            createdAt: event.sortTimestamp,
+            description: event.summary ?? "Project activity"
+          };
+      }
+    });
+  }, [projectHighlights, projectMilestones, projectTimelineEvents, selectedProject]);
 
   function formatProjectVisibilityLabel(visibility: ProjectVisibility): string {
     switch (visibility) {
@@ -441,10 +535,11 @@ export function ProjectsScreen({
   async function refreshProjectDetails(project: Project) {
     setProjectDetailLoading(true);
     try {
-      const [highlights, milestones, links] = await Promise.all([
+      const [highlights, milestones, links, timelineEvents] = await Promise.all([
         getProjectHighlights(project.id),
         getProjectMilestones(project.id),
-        getProjectClubLinks(project.id, user.userId)
+        getProjectClubLinks(project.id, user.userId),
+        getCommonsFeedEvents(user.userId, { projectId: project.id, limit: 50 })
       ]);
       setProjectHighlights(highlights);
       const normalizedMilestones = milestones.map((item, index) => ({
@@ -453,6 +548,7 @@ export function ProjectsScreen({
         tasks: Array.isArray(item.tasks) ? item.tasks : []
       }));
       setProjectMilestones(normalizedMilestones);
+      setProjectTimelineEvents(timelineEvents);
       setProjectClubLinks(links);
       setTaskTimeByTaskId({});
       setTaskTimeLoadingByTaskId({});
@@ -1232,6 +1328,7 @@ export function ProjectsScreen({
         <View style={styles.rowWrap}>
           <Pressable onPress={() => setProjectTab("HIGHLIGHTS")} style={[styles.pill, projectTab === "HIGHLIGHTS" && styles.pillActive]}><Text style={[styles.pillText, projectTab === "HIGHLIGHTS" && styles.pillTextActive]}>Highlights</Text></Pressable>
           <Pressable onPress={() => setProjectTab("MILESTONES")} style={[styles.pill, projectTab === "MILESTONES" && styles.pillActive]}><Text style={[styles.pillText, projectTab === "MILESTONES" && styles.pillTextActive]}>Milestones</Text></Pressable>
+          <Pressable onPress={() => setProjectTab("TIMELINE")} style={[styles.pill, projectTab === "TIMELINE" && styles.pillActive]}><Text style={[styles.pillText, projectTab === "TIMELINE" && styles.pillTextActive]}>Timeline</Text></Pressable>
         </View>
         {message ? <Text style={styles.message}>{message}</Text> : null}
         {projectDetailLoading ? <ActivityIndicator style={{ marginTop: 8 }} /> : null}
@@ -1256,6 +1353,29 @@ export function ProjectsScreen({
             }
             renderItem={({ item }) => (
               <View style={styles.card}><Text style={styles.title}>@{item.authorId}</Text><Text>{item.text}</Text></View>
+            )}
+          />
+          {requestClubModal}
+        </>
+      );
+    }
+
+    if (projectTab === "TIMELINE") {
+      return (
+        <>
+          <FlatList
+            data={timelineItems}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.list}
+            ListHeaderComponent={detailHeader}
+            ListEmptyComponent={<View style={styles.card}><Text style={styles.hint}>No project activity yet.</Text></View>}
+            renderItem={({ item }) => (
+              <View style={styles.card}>
+                <Text style={styles.timelineLabel}>{item.icon} {item.label}</Text>
+                <Text style={styles.title}>{item.description}</Text>
+                <Text style={styles.hint}>By @{item.actorId}</Text>
+                <Text style={styles.hint}>{new Date(item.createdAt).toLocaleString()}</Text>
+              </View>
             )}
           />
           {requestClubModal}
@@ -1570,6 +1690,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
     marginBottom: 8
+  },
+  timelineLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0b57d0",
+    marginBottom: 6
   },
   focusedTargetCard: {
     borderColor: "#9bb8f5",
