@@ -42,6 +42,167 @@ const threadLabels: Record<ThreadType, string> = {
 const interactionThreadTypes: ThreadType[] = ["COMMENTS", "THANK_YOU", "SUGGESTIONS", "QUESTIONS"];
 const COMMENT_PREVIEW_MAX_LENGTH = 80;
 
+type ThreadPresentation = {
+  label: string;
+  icon: string;
+  accentColor: string;
+  chipBackgroundColor: string;
+  chipTextColor: string;
+};
+
+type CardPresentation = {
+  label: string;
+  icon: string;
+  accentColor: string;
+  badgeBackgroundColor: string;
+  badgeTextColor: string;
+  surfaceColor?: string;
+};
+
+function getThreadPresentation(threadType: ThreadType): ThreadPresentation {
+  switch (threadType) {
+    case "COMMENTS":
+      return {
+        label: "Comments",
+        icon: "💬",
+        accentColor: "#2f6fed",
+        chipBackgroundColor: "#eef4ff",
+        chipTextColor: "#1f4fbf"
+      };
+    case "SUGGESTIONS":
+      return {
+        label: "Suggestions",
+        icon: "💡",
+        accentColor: "#2f9e44",
+        chipBackgroundColor: "#eef9f0",
+        chipTextColor: "#1f7a33"
+      };
+    case "QUESTIONS":
+      return {
+        label: "Questions",
+        icon: "❓",
+        accentColor: "#7a3ff2",
+        chipBackgroundColor: "#f4efff",
+        chipTextColor: "#5f2dcf"
+      };
+    case "THANK_YOU":
+      return {
+        label: "Gratitude",
+        icon: "🙏",
+        accentColor: "#c7921e",
+        chipBackgroundColor: "#fff7df",
+        chipTextColor: "#9c6b00"
+      };
+  }
+}
+
+function getEventCardPresentation(eventType: FeedEventType): CardPresentation {
+  switch (eventType) {
+    case "COMMENT_ADDED":
+      return {
+        label: "Comment",
+        icon: "💬",
+        accentColor: "#2f6fed",
+        badgeBackgroundColor: "#eef4ff",
+        badgeTextColor: "#1f4fbf"
+      };
+    case "QUESTION_ADDED":
+      return {
+        label: "Question",
+        icon: "❓",
+        accentColor: "#7a3ff2",
+        badgeBackgroundColor: "#f4efff",
+        badgeTextColor: "#5f2dcf"
+      };
+    case "SUGGESTION_ADDED":
+      return {
+        label: "Suggestion",
+        icon: "💡",
+        accentColor: "#2f9e44",
+        badgeBackgroundColor: "#eef9f0",
+        badgeTextColor: "#1f7a33"
+      };
+    case "GRATITUDE_ADDED":
+      return {
+        label: "Gratitude",
+        icon: "🙏",
+        accentColor: "#c7921e",
+        badgeBackgroundColor: "#fff7df",
+        badgeTextColor: "#9c6b00"
+      };
+    case "PROJECT_HIGHLIGHT_CREATED":
+      return {
+        label: "Highlight",
+        icon: "✨",
+        accentColor: "#2f9e44",
+        badgeBackgroundColor: "#eef9f0",
+        badgeTextColor: "#1f7a33",
+        surfaceColor: "#f7fcf8"
+      };
+    case "MILESTONE_COMPLETED":
+      return {
+        label: "Milestone Completed",
+        icon: "🏁",
+        accentColor: "#c7921e",
+        badgeBackgroundColor: "#fff7df",
+        badgeTextColor: "#9c6b00",
+        surfaceColor: "#fffbf2"
+      };
+    case "TASK_COMPLETED":
+      return {
+        label: "Task Completed",
+        icon: "✅",
+        accentColor: "#b7791f",
+        badgeBackgroundColor: "#fff7df",
+        badgeTextColor: "#8a5a00",
+        surfaceColor: "#fffbf2"
+      };
+    case "CLUB_EVENT_CREATED":
+      return {
+        label: "Volunteer Event",
+        icon: "🗓️",
+        accentColor: "#0f766e",
+        badgeBackgroundColor: "#eafaf8",
+        badgeTextColor: "#0f5c56",
+        surfaceColor: "#f4fffd"
+      };
+    case "CLUB_POST_CREATED":
+      return {
+        label: "Club Post",
+        icon: "👥",
+        accentColor: "#4f6fd6",
+        badgeBackgroundColor: "#eef2ff",
+        badgeTextColor: "#3246a8",
+        surfaceColor: "#f7f9ff"
+      };
+    case "PROJECT_CREATED":
+      return {
+        label: "New Project",
+        icon: "🚀",
+        accentColor: "#0f766e",
+        badgeBackgroundColor: "#eafaf8",
+        badgeTextColor: "#0f5c56",
+        surfaceColor: "#f4fffd"
+      };
+    case "POST_CREATED":
+      return {
+        label: "Post",
+        icon: "💭",
+        accentColor: "#4f6fd6",
+        badgeBackgroundColor: "#eef2ff",
+        badgeTextColor: "#3246a8"
+      };
+    default:
+      return {
+        label: "Activity",
+        icon: "📝",
+        accentColor: "#6b7280",
+        badgeBackgroundColor: "#f3f4f6",
+        badgeTextColor: "#4b5563"
+      };
+  }
+}
+
 function formatProjectVisibilityLabel(visibility: string | undefined): string {
   switch (visibility) {
     case "PUBLIC":
@@ -116,22 +277,48 @@ const TASK_GROUP_WINDOW_MS = 15 * 60 * 1000;
 
 function ActivityCard({
   label,
+  icon,
   title,
   subtitle,
   body,
   tone = "default",
-  footer
+  footer,
+  accentColor,
+  badgeBackgroundColor,
+  badgeTextColor,
+  surfaceColor
 }: {
   label: string;
+  icon?: string;
   title: string;
   subtitle?: string;
   body?: string;
   tone?: "default" | "club" | "project" | "progress";
   footer?: string;
+  accentColor?: string;
+  badgeBackgroundColor?: string;
+  badgeTextColor?: string;
+  surfaceColor?: string;
 }) {
   return (
-    <View style={[styles.card, tone === "club" ? styles.cardClub : null, tone === "project" ? styles.cardProject : null, tone === "progress" ? styles.cardProgress : null]}>
-      <Text style={styles.eventLabel}>{label}</Text>
+    <View
+      style={[
+        styles.card,
+        tone === "club" ? styles.cardClub : null,
+        tone === "project" ? styles.cardProject : null,
+        tone === "progress" ? styles.cardProgress : null,
+        accentColor ? { borderLeftWidth: 4, borderLeftColor: accentColor } : null,
+        surfaceColor ? { backgroundColor: surfaceColor } : null
+      ]}
+    >
+      <View style={styles.cardHeaderRow}>
+        <View style={[styles.eventBadge, badgeBackgroundColor ? { backgroundColor: badgeBackgroundColor } : null]}>
+          <Text style={[styles.eventLabel, badgeTextColor ? { color: badgeTextColor } : null]}>
+            {icon ? `${icon} ` : ""}
+            {label}
+          </Text>
+        </View>
+      </View>
       <Text style={styles.author}>{title}</Text>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {body ? <Text style={styles.eventBody}>{body}</Text> : null}
@@ -613,15 +800,20 @@ export function FeedScreen({
     const clubName = event.clubId ? clubById[event.clubId]?.name ?? event.clubId : undefined;
     const projectName = event.projectId ? projectById[event.projectId]?.title ?? event.projectId : undefined;
     const projectVisibility = event.projectId ? formatProjectVisibilityLabel(projectById[event.projectId]?.visibility) : undefined;
+    const presentation = getEventCardPresentation(event.eventType as FeedEventType);
 
     switch (event.eventType as FeedEventType) {
       case "POST_CREATED": {
         const text = postById[event.entityId]?.text ?? event.summary ?? "Post content unavailable.";
         return (
           <ActivityCard
-            label="Post"
+            label={presentation.label}
+            icon={presentation.icon}
             title={`@${event.actorId}`}
             body={text}
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -631,11 +823,16 @@ export function FeedScreen({
         const text = postById[event.entityId]?.text ?? event.summary ?? "Club post content unavailable.";
         return (
           <ActivityCard
-            label="Club Post"
+            label={presentation.label}
+            icon={presentation.icon}
             title={clubName ? clubName : "Club"}
             subtitle={`By @${event.actorId}`}
             body={text}
             tone="club"
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
+            surfaceColor={presentation.surfaceColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -645,11 +842,16 @@ export function FeedScreen({
         const text = highlightTextById[event.entityId] ?? event.summary ?? "Project highlight content unavailable.";
         return (
           <ActivityCard
-            label="Project Highlight"
+            label={presentation.label}
+            icon={presentation.icon}
             title={projectName ? projectName : "Project"}
             subtitle={`By @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             body={text}
             tone="project"
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
+            surfaceColor={presentation.surfaceColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -658,10 +860,15 @@ export function FeedScreen({
       case "PROJECT_CREATED": {
         return (
           <ActivityCard
-            label="New Project"
+            label={presentation.label}
+            icon={presentation.icon}
             title={projectName ? projectName : "Project"}
             subtitle={`Created by @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             tone="project"
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
+            surfaceColor={presentation.surfaceColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -671,10 +878,15 @@ export function FeedScreen({
         const milestoneTitle = milestoneTitleById[event.entityId] ?? event.summary ?? "Milestone";
         return (
           <ActivityCard
-            label="Milestone Completed"
+            label={presentation.label}
+            icon={presentation.icon}
             title={projectName ? projectName : "Project"}
             subtitle={`${milestoneTitle} • @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             tone="progress"
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
+            surfaceColor={presentation.surfaceColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -684,10 +896,15 @@ export function FeedScreen({
         const taskTitle = taskTextById[event.entityId] ?? event.summary ?? "Task";
         return (
           <ActivityCard
-            label="Task Completed"
+            label={presentation.label}
+            icon={presentation.icon}
             title={projectName ? projectName : "Project"}
             subtitle={`${taskTitle} • @${event.actorId}${projectVisibility ? ` • ${projectVisibility}` : ""}`}
             tone="progress"
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
+            surfaceColor={presentation.surfaceColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -696,9 +913,14 @@ export function FeedScreen({
       default:
         return (
           <ActivityCard
-            label="Activity"
+            label={presentation.label}
+            icon={presentation.icon}
             title={`@${event.actorId}`}
             body={event.summary ?? "Activity update"}
+            accentColor={presentation.accentColor}
+            badgeBackgroundColor={presentation.badgeBackgroundColor}
+            badgeTextColor={presentation.badgeTextColor}
+            surfaceColor={presentation.surfaceColor}
             footer={new Date(event.sortTimestamp).toLocaleString()}
           />
         );
@@ -815,15 +1037,21 @@ export function FeedScreen({
             item.latestSortTimestamp === item.earliestSortTimestamp
               ? new Date(item.latestSortTimestamp).toLocaleString()
               : `${new Date(item.earliestSortTimestamp).toLocaleTimeString()} - ${new Date(item.latestSortTimestamp).toLocaleTimeString()}`;
+          const presentation = getEventCardPresentation("TASK_COMPLETED");
 
           return (
             <Pressable onPress={() => void handlePressFeedTile(item)}>
               <ActivityCard
                 label="Task Progress"
+                icon={presentation.icon}
                 title={`@${item.actorId} completed ${item.count} tasks`}
                 subtitle={`in ${projectName}`}
                 body={taskNames.length > 0 ? `Includes: ${taskNames.join(", ")}${item.count > taskNames.length ? ", ..." : ""}` : undefined}
                 tone="progress"
+                accentColor={presentation.accentColor}
+                badgeBackgroundColor={presentation.badgeBackgroundColor}
+                badgeTextColor={presentation.badgeTextColor}
+                surfaceColor={presentation.surfaceColor}
                 footer={timespanText}
               />
             </Pressable>
@@ -835,6 +1063,7 @@ export function FeedScreen({
         const isThreadExpanded = !!postId && activePostId === postId;
         const isFocused = !!postId && highlightedPostId === postId;
         const interactionPreview = postId ? interactionPreviewByPostId[postId] : undefined;
+        const activeThreadPresentation = getThreadPresentation(activeThreadType);
         return (
           <Animated.View
             onLayout={
@@ -856,28 +1085,44 @@ export function FeedScreen({
                 style={styles.threadCard}
               >
                 {!isThreadExpanded && interactionPreview?.firstCommentText ? (
-                  <Text style={styles.interactionPreviewText} numberOfLines={1}>
-                    💬 First comment: "{interactionPreview.firstCommentText}"
-                  </Text>
+                  <View style={[styles.previewBadge, { backgroundColor: getThreadPresentation("COMMENTS").chipBackgroundColor }]}> 
+                    <Text style={[styles.interactionPreviewText, { color: getThreadPresentation("COMMENTS").chipTextColor }]} numberOfLines={1}>
+                      {getThreadPresentation("COMMENTS").icon} First comment: "{interactionPreview.firstCommentText}"
+                    </Text>
+                  </View>
                 ) : null}
                 {!isThreadExpanded && interactionPreview?.gratitudeSummary ? (
-                  <Text style={styles.interactionPreviewText} numberOfLines={1}>
-                    🙏 {interactionPreview.gratitudeSummary}
-                  </Text>
+                  <View style={[styles.previewBadge, { backgroundColor: getThreadPresentation("THANK_YOU").chipBackgroundColor }]}> 
+                    <Text style={[styles.interactionPreviewText, { color: getThreadPresentation("THANK_YOU").chipTextColor }]} numberOfLines={1}>
+                      {getThreadPresentation("THANK_YOU").icon} {interactionPreview.gratitudeSummary}
+                    </Text>
+                  </View>
                 ) : null}
                 <Text style={styles.switcherLabel}>Respond to this post:</Text>
                 <View style={styles.mockUserButtons}>
                   {(["COMMENTS", "QUESTIONS", "THANK_YOU", "SUGGESTIONS"] as ThreadType[]).map((threadType) => {
                     const active = activePostId === postId && activeThreadType === threadType;
                     const count = threadCountsByPostId[postId]?.[threadType];
-                    const label = `${threadLabels[threadType]} (${count ?? 0})`;
+                    const presentation = getThreadPresentation(threadType);
+                    const label = `${presentation.icon} ${presentation.label} (${count ?? 0})`;
                     return (
                       <Pressable
                         key={`${item.id}-${threadType}`}
                         onPress={() => handleOpenThread(postId, threadType)}
-                        style={[styles.userButton, active && styles.userButtonActive]}
+                        style={[
+                          styles.userButton,
+                          {
+                            borderColor: presentation.accentColor,
+                            backgroundColor: active ? presentation.accentColor : presentation.chipBackgroundColor
+                          }
+                        ]}
                       >
-                        <Text style={[styles.userButtonText, active && styles.userButtonTextActive]}>
+                        <Text
+                          style={[
+                            styles.userButtonText,
+                            { color: active ? "#fff" : presentation.chipTextColor }
+                          ]}
+                        >
                           {label}
                         </Text>
                       </Pressable>
@@ -891,7 +1136,7 @@ export function FeedScreen({
                       value={commentText}
                       onChangeText={setCommentText}
                       placeholder={`Add ${threadLabels[activeThreadType].toLowerCase()} response...`}
-                      style={styles.commentInput}
+                      style={[styles.commentInput, { borderColor: activeThreadPresentation.accentColor }]}
                     />
                     {activeReplyParentId ? (
                       <Text style={styles.hint}>Replying to a response • tap “Cancel Reply” to post top-level</Text>
@@ -1111,9 +1356,15 @@ const styles = StyleSheet.create({
     paddingTop: 10
   },
   interactionPreviewText: {
-    color: "#555",
     fontSize: 12,
-    marginBottom: 4
+  },
+  previewBadge: {
+    borderRadius: 999,
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginBottom: 6,
+    maxWidth: "100%"
   },
   commentInput: {
     borderWidth: 1,
@@ -1146,6 +1397,17 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 4
   },
+  cardHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8
+  },
+  eventBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    alignSelf: "flex-start"
+  },
   cardClub: {
     borderColor: "#89a7ff",
     backgroundColor: "#f7f9ff"
@@ -1161,8 +1423,6 @@ const styles = StyleSheet.create({
   eventLabel: {
     fontSize: 11,
     fontWeight: "700",
-    color: "#555",
-    marginBottom: 6,
     textTransform: "uppercase"
   },
   author: {

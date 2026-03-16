@@ -84,7 +84,9 @@ function getRelevantPhilosophyDocs() {
     }
   }
 
-  return parts.join("\n\n====================\n\n");
+  const combined = parts.join("\n\n====================\n\n");
+const maxChars = 12000;
+return combined.length > maxChars ? combined.slice(0, maxChars) : combined;
 }
 
 function generateProductUXSuggestions(taskId, files) {
@@ -114,10 +116,10 @@ ${changedFilesText}
   const truncatedInput =
     inputText.length > maxChars ? inputText.slice(0, maxChars) : inputText;
 
-  const prompt = `
-You are a product and UX review assistant for a social/productivity app called ProSocial.
+const prompt = `
+You are a product and UX review tool for ProSocial.
 
-Review the task context and return ONLY markdown in exactly this structure:
+Review the provided task context and return ONLY markdown in exactly this format:
 
 ## Product / UX Suggestions
 - item
@@ -129,11 +131,14 @@ Review the task context and return ONLY markdown in exactly this structure:
 - item
 
 Rules:
-- Keep suggestions narrow and practical.
-- Focus on likely user expectations, clarity, interaction quality, and social/productivity alignment.
-- Do not suggest broad redesigns unless strongly justified.
-- Do not invent missing product goals; use the provided task and philosophy context.
-- If no meaningful suggestions are identified for a section, write:
+- Output ONLY those three sections.
+- Keep each bullet short, concrete, and relevant to the current task.
+- Focus on user clarity, usability, social/productivity alignment, and likely interaction quality.
+- Do NOT provide a general code review.
+- Do NOT praise the implementation.
+- Do NOT give broad redesign ideas unless clearly justified by the task context.
+- Do NOT repeat the same idea in multiple sections.
+- If a section has no strong items, write exactly:
 - none strongly identified
 
 Context:
@@ -220,7 +225,8 @@ function getUntrackedFiles() {
 }
 
 
-function generateRootCauseAssessment(taskId, files) {
+function generateOutcomeAssessment(taskId, files) {
+  const mode = getTaskReviewMode(taskId);
   const taskDocs = getTaskDocs(taskId);
   const diffText = getDiffForFiles(files);
 
@@ -238,10 +244,13 @@ ${diffText}
   const truncatedInput =
     inputText.length > maxChars ? inputText.slice(0, maxChars) : inputText;
 
-  const prompt = `
-You are a bugfix review assistant.
+  let prompt;
 
-Review the task docs and code diff, then return ONLY markdown in exactly this structure:
+  if (mode === "bug") {
+prompt = `
+You are a bugfix review tool.
+
+Review the task docs and code diff, then return ONLY markdown in exactly this format:
 
 ## Likely Root Cause
 - item
@@ -257,16 +266,53 @@ Review the task docs and code diff, then return ONLY markdown in exactly this st
 - item
 
 Rules:
+- Output ONLY those four sections.
 - Base the analysis only on the provided task docs and diff.
-- Do not claim certainty if the evidence is incomplete.
-- If the task does not appear bug-oriented, still provide a cautious best-effort assessment.
+- Do NOT provide a general implementation summary.
+- Do NOT praise the changes.
+- Do NOT repeat the same point across sections.
+- Do NOT claim certainty unless strongly supported by the evidence.
 - Keep the output concise.
-- If a section has little evidence, write:
+- If a section has no strong evidence, write exactly:
 - none strongly identified
 
 Context:
 ${truncatedInput}
 `.trim();
+  } else {
+prompt = `
+You are a feature and UX outcome review tool.
+
+Review the task docs and code diff, then return ONLY markdown in exactly this format:
+
+## User / UX Gap Addressed
+- item
+
+## Solution Effectiveness
+- item
+
+## Remaining UX Risks / Gaps
+- item
+
+## Improvement Confidence
+- High / Medium / Low
+- brief reason
+
+Rules:
+- Output ONLY those four sections.
+- Evaluate how well the implementation appears to solve the user or UX gap described in the task docs.
+- Do NOT provide a general code review.
+- Do NOT praise the implementation.
+- Do NOT repeat the same point across sections.
+- Do NOT invent product goals not supported by the task docs.
+- Keep the output concise.
+- If a section has no strong evidence, write exactly:
+- none strongly identified
+
+Context:
+${truncatedInput}
+`.trim();
+  }
 
   try {
     const output = cp.execSync(
@@ -279,9 +325,15 @@ ${truncatedInput}
       }
     );
 
-    return output.trim();
+    return {
+      mode,
+      text: output.trim()
+    };
   } catch (err) {
-    return `Root Cause AI Assist failed: ${err.message}`;
+    return {
+      mode,
+      text: `Assessment AI Assist failed: ${err.message}`
+    };
   }
 }
 
@@ -369,32 +421,30 @@ function generateLocalTechnicalDetails(taskId, files) {
   const truncatedDiff =
     diffText.length > maxChars ? diffText.slice(0, maxChars) : diffText;
 
-  const prompt = `
-You are a code-diff analyzer.
+const prompt = `
+You are a code-diff extraction tool.
 
 Task ID: ${taskId}
 
-Read the git diff below and output ONLY markdown in exactly this format:
+Analyze the git diff below and return ONLY markdown in exactly this format:
 
 ## Functions Modified
-- item
 - item
 
 ## Functions Added
 - item
-- item
 
 ## Key Structures / Endpoints / Components Affected
 - item
-- item
 
 Rules:
-- Do not explain anything outside those sections.
-- Do not apologize.
-- Do not mention model limitations.
-- Do not suggest other models or tools.
-- Use exact names when clearly identifiable from the diff.
-- If a section has no confident items, write:
+- Output ONLY those three sections.
+- Do NOT include any introduction, conclusion, praise, commentary, or recommendations.
+- Do NOT explain your reasoning.
+- Use exact function, method, component, hook, service, route, type, or structure names when clearly identifiable.
+- If a name is not fully clear, use the most grounded short description possible.
+- Do NOT list the same item in both "Functions Modified" and "Functions Added".
+- If a section has no confident items, write exactly:
 - none confidently identified
 
 Git diff:
@@ -531,6 +581,19 @@ function run(cmd) {
   } catch (err) {
     return "";
   }
+}
+
+function getTaskReviewMode(taskId) {
+  const userStoryPath = path.join(taskPath(taskId), "user-story.md");
+  const content = readFileIfExists(userStoryPath);
+
+  if (!content) return "feature";
+
+  if (/Status:\s*Bug/i.test(content)) {
+    return "bug";
+  }
+
+  return "feature";
 }
 
 function getChangedFiles() {
@@ -755,9 +818,15 @@ function review(taskId) {
   const uxSuggestions = generateProductUXSuggestions(taskId, reviewFiles);
   console.log(uxSuggestions);
 
+const outcomeAssessment = generateOutcomeAssessment(taskId, reviewFiles);
+
+if (outcomeAssessment.mode === "bug") {
   console.log("\nRoot Cause / Resolution Assessment (AI Assist):\n");
-  const rootCauseAssessment = generateRootCauseAssessment(taskId, reviewFiles);
-  console.log(rootCauseAssessment);
+} else {
+  console.log("\nSolution Effectiveness Assessment (AI Assist):\n");
+}
+
+console.log(outcomeAssessment.text);
 
   console.log("\nNext step:");
   console.log(`Open ${path.relative(ROOT, report)} and fill in the remaining sections before completing the task.`);
