@@ -25,7 +25,10 @@ import {
   Visibility
 } from "../../domain/types";
 import { evaluateText } from "../../lib/moderationEngine";
-import { buildNotificationPreviewText } from "../../lib/notificationPreview";
+import {
+  buildCommentNotificationMessage,
+  buildNotificationPreviewText
+} from "../../lib/notificationPreview";
 import {
   GlobalSearchResult,
   LocalPost as Post,
@@ -792,7 +795,11 @@ router.get("/notifications", (req, res) => {
         id: `comment:${comment.id}`,
         type: "POST_COMMENTED",
         actorId: comment.authorId,
-        message: `@${comment.authorId} commented on your post`,
+        message: buildCommentNotificationMessage({
+          actorId: comment.authorId,
+          textContent: comment.textContent,
+          threadType: comment.threadType
+        }),
         relatedType: "POST",
         relatedId: comment.postId,
         previewText: buildNotificationPreviewText(comment.textContent),

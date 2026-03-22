@@ -54,7 +54,7 @@ export function NotificationsScreen({
       ListEmptyComponent={<Text style={styles.hint}>No notifications yet.</Text>}
       renderItem={({ item }) => {
         const unread = !readIds[item.id];
-        const previewLabel = item.previewText ? `Preview: ${item.previewText}` : null;
+        const previewLabel = item.previewText && !item.message.includes(item.previewText) ? `Preview: ${item.previewText}` : null;
         return (
           <Pressable
             onPress={() => handlePressNotification(item)}
