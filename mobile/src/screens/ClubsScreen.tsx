@@ -13,6 +13,7 @@ import {
   createClubJoinRequest,
   createClubEvent,
   createPost,
+  createProject,
   createClub,
   getCategories,
   getClubCommonsFeed,
@@ -30,6 +31,7 @@ import {
   Post,
   Project,
   ProjectClubLink,
+  ProjectVisibility,
   reviewProjectClubLink,
   reviewClubJoinRequest,
   searchClubs,
@@ -231,6 +233,10 @@ export function ClubsScreen({
   const [clubDetailLoading, setClubDetailLoading] = useState(false);
   const [clubHighlightText, setClubHighlightText] = useState("");
   const [pendingFocusClubPostId, setPendingFocusClubPostId] = useState<string | null>(null);
+  const [createClubProjectModalOpen, setCreateClubProjectModalOpen] = useState(false);
+  const [newClubProjectTitle, setNewClubProjectTitle] = useState("");
+  const [newClubProjectDescription, setNewClubProjectDescription] = useState("");
+  const [newClubProjectVisibility, setNewClubProjectVisibility] = useState<ProjectVisibility>("PUBLIC");
 
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -352,6 +358,12 @@ export function ClubsScreen({
     if (!focusClubPostId) return;
     setPendingFocusClubPostId(focusClubPostId);
   }, [focusClubPostId]);
+
+  useEffect(() => {
+    if (!viewingClub) return;
+    const nextVisibility: ProjectVisibility = viewingClub.isPublic === false ? "CLUB_MEMBERS" : "PUBLIC";
+    setNewClubProjectVisibility(nextVisibility);
+  }, [viewingClub?.id, viewingClub?.isPublic]);
 
   useEffect(() => {
     if (!pendingFocusClubPostId || !viewingClub) return;
@@ -613,6 +625,35 @@ export function ClubsScreen({
       setClubHighlightText("");
       setMessage("Club highlight posted.");
       await openClubDetail(viewingClub);
+      loadData();
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  }
+
+  async function handleCreateClubProject() {
+    if (!viewingClub) return;
+    if (!newClubProjectTitle.trim()) {
+      setMessage("Project title is required.");
+      return;
+    }
+
+    try {
+      await createProject({
+        ownerId: viewingClub.id,
+        createdBy: user.userId,
+        clubId: viewingClub.id,
+        categoryId: viewingClub.categoryId,
+        title: newClubProjectTitle.trim(),
+        description: newClubProjectDescription.trim() || undefined,
+        visibility: newClubProjectVisibility
+      });
+      setCreateClubProjectModalOpen(false);
+      setNewClubProjectTitle("");
+      setNewClubProjectDescription("");
+      setMessage("Club project created.");
+      await openClubDetail(viewingClub);
+      setClubDetailTab("PROJECTS");
       loadData();
     } catch (err) {
       setMessage((err as Error).message);
@@ -1341,6 +1382,14 @@ export function ClubsScreen({
             {clubDetailTab === "PROJECTS" ? (
               <>
                 <Text style={styles.sectionTitle}>Projects</Text>
+                {canManageClub ? (
+                  <View style={styles.card}>
+                    <Text style={styles.hint}>Create a new project directly for this club.</Text>
+                    <Pressable onPress={() => setCreateClubProjectModalOpen(true)} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Create Project</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 {clubProjects.length === 0 ? <Text style={styles.hint}>No approved projects linked to this club yet.</Text> : null}
                 {clubProjects.map((item) => (
                   <Pressable key={`club-project-${item.id}`} style={styles.card} onPress={() => onNavigateToProject?.(item.id)}>
@@ -1491,6 +1540,70 @@ export function ClubsScreen({
                 )}
               </>
             ) : null}
+
+            <Modal
+              visible={createClubProjectModalOpen}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setCreateClubProjectModalOpen(false)}
+            >
+              <View style={styles.modalBackdrop}>
+                <Pressable style={StyleSheet.absoluteFill} onPress={() => setCreateClubProjectModalOpen(false)} />
+                <View style={styles.modalCard}>
+                  <Text style={styles.sectionTitle}>Create Project</Text>
+                  <Text style={styles.hint}>This project will be automatically linked to {viewingClub.name}.</Text>
+                  <ScrollView
+                    style={styles.modalScroll}
+                    contentContainerStyle={styles.modalScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator
+                  >
+                    <TextInput
+                      value={newClubProjectTitle}
+                      onChangeText={setNewClubProjectTitle}
+                      placeholder="Project title"
+                      style={styles.input}
+                    />
+                    <TextInput
+                      value={newClubProjectDescription}
+                      onChangeText={setNewClubProjectDescription}
+                      placeholder="Project description (optional)"
+                      style={styles.input}
+                    />
+
+                    <Text style={styles.filterLabel}>Visibility</Text>
+                    <View style={styles.rowWrap}>
+                      {(viewingClub.isPublic === false
+                        ? (["CLUB_MEMBERS", "CLUB_MODERATORS", "CLUB_OWNER_ONLY"] as ProjectVisibility[])
+                        : (["PUBLIC", "CLUB_MEMBERS", "CLUB_MODERATORS", "CLUB_OWNER_ONLY"] as ProjectVisibility[])
+                      ).map((visibility) => {
+                        const active = newClubProjectVisibility === visibility;
+                        return (
+                          <Pressable
+                            key={`club-project-visibility-${visibility}`}
+                            onPress={() => setNewClubProjectVisibility(visibility)}
+                            style={[styles.pill, active && styles.pillActive]}
+                          >
+                            <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                              {formatProjectVisibilityLabel(visibility)}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+
+                  <View style={styles.rowWrap}>
+                    <Pressable onPress={handleCreateClubProject} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Create Project</Text>
+                    </Pressable>
+                    <Pressable onPress={() => setCreateClubProjectModalOpen(false)} style={styles.buttonInline}>
+                      <Text style={styles.buttonText}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            </Modal>
 
             <Modal
               visible={createEventModalOpen}
