@@ -40,6 +40,7 @@ const threadLabels: Record<ThreadType, string> = {
 };
 
 const interactionThreadTypes: ThreadType[] = ["COMMENTS", "THANK_YOU", "SUGGESTIONS", "QUESTIONS"];
+const DEFAULT_RESPONSE_THREAD_TYPE: ThreadType = "COMMENTS";
 const COMMENT_PREVIEW_MAX_LENGTH = 80;
 
 type ThreadPresentation = {
@@ -613,7 +614,7 @@ export function FeedScreen({
 
   useEffect(() => {
     if (!focusPostId) return;
-    const targetThreadType = focusFromCommentNotification ? (focusThreadType ?? "COMMENTS") : "COMMENTS";
+    const targetThreadType = focusFromCommentNotification ? (focusThreadType ?? DEFAULT_RESPONSE_THREAD_TYPE) : DEFAULT_RESPONSE_THREAD_TYPE;
     setCommentNavigationMessage(null);
     setNotificationFocusLock(!!focusFromCommentNotification);
     setComments([]);
@@ -789,7 +790,9 @@ export function FeedScreen({
       });
       setCommentText("");
       setActiveReplyParentId(undefined);
-      setCommentMessage(`${threadLabels[threadType]} posted.`);
+      setCommentMessage(
+        threadType === DEFAULT_RESPONSE_THREAD_TYPE ? "Response posted." : `${threadLabels[threadType]} posted.`
+      );
       loadComments(postId, threadType);
     } catch (err) {
       setCommentMessage((err as Error).message);
@@ -965,7 +968,7 @@ export function FeedScreen({
     }
 
     if (event.entityType === "POST") {
-      await handleOpenThread(event.entityId, "COMMENTS");
+      await handleOpenThread(event.entityId, DEFAULT_RESPONSE_THREAD_TYPE);
     }
   }
 
@@ -1064,6 +1067,7 @@ export function FeedScreen({
         const isFocused = !!postId && highlightedPostId === postId;
         const interactionPreview = postId ? interactionPreviewByPostId[postId] : undefined;
         const activeThreadPresentation = getThreadPresentation(activeThreadType);
+        const defaultThreadCount = postId ? threadCountsByPostId[postId]?.[DEFAULT_RESPONSE_THREAD_TYPE] ?? 0 : 0;
         return (
           <Animated.View
             onLayout={
@@ -1100,34 +1104,35 @@ export function FeedScreen({
                 ) : null}
                 <Text style={styles.switcherLabel}>Respond to this post:</Text>
                 <View style={styles.mockUserButtons}>
-                  {(["COMMENTS", "QUESTIONS", "THANK_YOU", "SUGGESTIONS"] as ThreadType[]).map((threadType) => {
-                    const active = activePostId === postId && activeThreadType === threadType;
-                    const count = threadCountsByPostId[postId]?.[threadType];
-                    const presentation = getThreadPresentation(threadType);
-                    const label = `${presentation.icon} ${presentation.label} (${count ?? 0})`;
-                    return (
-                      <Pressable
-                        key={`${item.id}-${threadType}`}
-                        onPress={() => handleOpenThread(postId, threadType)}
-                        style={[
-                          styles.userButton,
-                          {
-                            borderColor: presentation.accentColor,
-                            backgroundColor: active ? presentation.accentColor : presentation.chipBackgroundColor
-                          }
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.userButtonText,
-                            { color: active ? "#fff" : presentation.chipTextColor }
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+                  <Pressable
+                    onPress={() => handleOpenThread(postId, DEFAULT_RESPONSE_THREAD_TYPE)}
+                    style={[
+                      styles.userButton,
+                      styles.respondButton,
+                      {
+                        borderColor: getThreadPresentation(DEFAULT_RESPONSE_THREAD_TYPE).accentColor,
+                        backgroundColor:
+                          activePostId === postId
+                            ? getThreadPresentation(DEFAULT_RESPONSE_THREAD_TYPE).accentColor
+                            : getThreadPresentation(DEFAULT_RESPONSE_THREAD_TYPE).chipBackgroundColor
+                      }
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.userButtonText,
+                        activePostId === postId ? styles.userButtonTextActive : null,
+                        {
+                          color:
+                            activePostId === postId
+                              ? "#fff"
+                              : getThreadPresentation(DEFAULT_RESPONSE_THREAD_TYPE).chipTextColor
+                        }
+                      ]}
+                    >
+                      {`${getThreadPresentation(DEFAULT_RESPONSE_THREAD_TYPE).icon} Respond (${defaultThreadCount})`}
+                    </Text>
+                  </Pressable>
                 </View>
 
                 {isThreadExpanded ? (
@@ -1135,7 +1140,11 @@ export function FeedScreen({
                     <TextInput
                       value={commentText}
                       onChangeText={setCommentText}
-                      placeholder={`Add ${threadLabels[activeThreadType].toLowerCase()} response...`}
+                      placeholder={
+                        activeThreadType === DEFAULT_RESPONSE_THREAD_TYPE
+                          ? "Write a response..."
+                          : `Add ${threadLabels[activeThreadType].toLowerCase()} response...`
+                      }
                       style={[styles.commentInput, { borderColor: activeThreadPresentation.accentColor }]}
                     />
                     {activeReplyParentId ? (
@@ -1298,6 +1307,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 6,
     paddingHorizontal: 10
+  },
+  respondButton: {
+    minWidth: 132,
+    alignItems: "center"
   },
   userButtonActive: {
     backgroundColor: "#111",
