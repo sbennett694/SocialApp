@@ -227,6 +227,22 @@ export type ProjectMilestoneTask = {
   createdAt: string;
 };
 
+export type VolunteerRequestTargetType = "NONE" | "MILESTONE" | "TASK";
+
+export type VolunteerRequestStatus = "PENDING" | "ACCEPTED" | "REJECTED";
+
+export type VolunteerRequest = {
+  id: string;
+  projectId: string;
+  userId: string;
+  targetType: VolunteerRequestTargetType;
+  targetId?: string;
+  status: VolunteerRequestStatus;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+};
+
 export type TaskTimeEntry = {
   id: string;
   taskId: string;
@@ -1007,6 +1023,57 @@ export async function getProjectMilestones(projectId: string): Promise<ProjectMi
   const response = await apiFetch(`/projects/${encodeURIComponent(projectId)}/milestones`);
   if (!response.ok) {
     throw new Error(`Project milestones load failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function createVolunteerRequest(input: {
+  projectId: string;
+  userId: string;
+  targetType: VolunteerRequestTargetType;
+  targetId?: string;
+}): Promise<VolunteerRequest> {
+  const response = await apiFetch(`/projects/${encodeURIComponent(input.projectId)}/volunteer-requests`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      userId: input.userId,
+      targetType: input.targetType,
+      targetId: input.targetId
+    })
+  });
+  if (!response.ok) {
+    throw await extractApiError(response, "Volunteer request create failed");
+  }
+  return response.json();
+}
+
+export async function getVolunteerRequests(projectId: string, actorId: string): Promise<VolunteerRequest[]> {
+  const response = await apiFetch(
+    `/projects/${encodeURIComponent(projectId)}/volunteer-requests?actorId=${encodeURIComponent(actorId)}`
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Volunteer requests load failed");
+  }
+  return response.json();
+}
+
+export async function reviewVolunteerRequest(input: {
+  projectId: string;
+  requestId: string;
+  actorId: string;
+  status: "ACCEPTED" | "REJECTED";
+}): Promise<VolunteerRequest> {
+  const response = await apiFetch(
+    `/projects/${encodeURIComponent(input.projectId)}/volunteer-requests/${encodeURIComponent(input.requestId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actorId: input.actorId, status: input.status })
+    }
+  );
+  if (!response.ok) {
+    throw await extractApiError(response, "Volunteer request review failed");
   }
   return response.json();
 }

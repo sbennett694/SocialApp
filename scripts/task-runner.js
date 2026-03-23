@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
-const LOCAL_REVIEW_MODEL = "qwen3-coder:30b";
+const LOCAL_REVIEW_MODEL = "qwen2.5-coder:7b";
 
 
 const ROOT = process.cwd();
@@ -224,7 +224,6 @@ function getUntrackedFiles() {
   return output ? output.split(/\r?\n/).filter(Boolean) : [];
 }
 
-
 function generateOutcomeAssessment(taskId, files) {
   const mode = getTaskReviewMode(taskId);
   const taskDocs = getTaskDocs(taskId);
@@ -411,17 +410,23 @@ function getDiffForFiles(files) {
 }
 
 function generateLocalTechnicalDetails(taskId, files) {
+  console.log("[DEBUG] generateLocalTechnicalDetails starting");
+  console.log("[DEBUG] files passed to technical details:", files);
+
   const diffText = getDiffForFiles(files);
+  console.log("[DEBUG] diff length:", diffText.length);
 
   if (!diffText.trim()) {
     return "AI Assist skipped: no diff content found.";
   }
 
-  const maxChars = 30000;
+  const maxChars = 6000;
   const truncatedDiff =
     diffText.length > maxChars ? diffText.slice(0, maxChars) : diffText;
 
-const prompt = `
+  console.log("[DEBUG] truncated diff length:", truncatedDiff.length);
+
+  const prompt = `
 You are a code-diff extraction tool.
 
 Task ID: ${taskId}
@@ -452,16 +457,21 @@ ${truncatedDiff}
 `.trim();
 
   try {
+    console.log("[DEBUG] calling ollama for technical details...");
+    const start = Date.now();
+
     const output = cp.execSync(
       `ollama run ${LOCAL_REVIEW_MODEL}`,
       {
         input: prompt,
         cwd: ROOT,
         encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"]
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 45000
       }
     );
 
+    console.log(`[DEBUG] ollama technical details completed in ${Date.now() - start}ms`);
     return output.trim();
   } catch (err) {
     return `AI Assist failed: ${err.message}`;
@@ -476,12 +486,16 @@ function injectTechnicalDetailsIntoReport(reportPathValue, aiDetails) {
   const techBlockRegex =
     /## Functions Modified\r?\n\r?\n-\r?\n\r?\n## Functions Added\r?\n\r?\n-\r?\n\r?\n## Key Structures \/ Endpoints \/ Components Affected\r?\n\r?\n-/;
 
+  console.log("\n[DEBUG] attempting report injection");
+  console.log("[DEBUG] report path:", reportPathValue);
+  console.log("[DEBUG] tech block regex matched:", techBlockRegex.test(content));
+
   if (!techBlockRegex.test(content)) {
+    console.log("[WARN] Technical details placeholder block not found in report.");
     return;
   }
 
   content = content.replace(techBlockRegex, aiDetails.trim());
-
   fs.writeFileSync(reportPathValue, content, "utf8");
 }
 
@@ -808,25 +822,21 @@ function review(taskId) {
       !f.includes("task-runner.js")
   );
 
+  console.log("\n[DEBUG] reviewFiles:");
+  console.log(reviewFiles);
+
+  console.log("\n[DEBUG] diff preview:");
+  console.log(getDiffForFiles(reviewFiles).slice(0, 1000));
+
   console.log("\nSuggested Technical Details (AI Assist):\n");
   const aiDetails = generateLocalTechnicalDetails(taskId, reviewFiles);
+
+  console.log("\n[DEBUG] aiDetails raw:");
+  console.log(aiDetails);
+
   console.log(aiDetails);
 
   injectTechnicalDetailsIntoReport(report, aiDetails);
-
-  console.log("\nProduct / UX Suggestions (AI Assist):\n");
-  const uxSuggestions = generateProductUXSuggestions(taskId, reviewFiles);
-  console.log(uxSuggestions);
-
-const outcomeAssessment = generateOutcomeAssessment(taskId, reviewFiles);
-
-if (outcomeAssessment.mode === "bug") {
-  console.log("\nRoot Cause / Resolution Assessment (AI Assist):\n");
-} else {
-  console.log("\nSolution Effectiveness Assessment (AI Assist):\n");
-}
-
-console.log(outcomeAssessment.text);
 
   console.log("\nNext step:");
   console.log(`Open ${path.relative(ROOT, report)} and fill in the remaining sections before completing the task.`);

@@ -5,6 +5,7 @@ import {
   Club,
   createTaskTimeEntry,
   createProject,
+  createVolunteerRequest,
   createProjectHighlight,
   createProjectMilestone,
   createProjectMilestoneTask,
@@ -16,6 +17,7 @@ import {
   getProjects,
   getProjectHighlights,
   getProjectMilestones,
+  getVolunteerRequests,
   getTaskTimeEntries,
   Project,
   ProjectClubLink,
@@ -23,7 +25,10 @@ import {
   ProjectMilestone,
   ProjectMilestoneTask,
   ProjectVisibility,
+  VolunteerRequest,
+  VolunteerRequestTargetType,
   requestProjectClubLink,
+  reviewVolunteerRequest,
   reviewProjectClubLink,
   searchClubs,
   TaskTimeEntry,
@@ -119,6 +124,7 @@ export function ProjectsScreen({
   const [projectMilestones, setProjectMilestones] = useState<ProjectMilestone[]>([]);
   const [projectTimelineEvents, setProjectTimelineEvents] = useState<FeedEvent[]>([]);
   const [projectClubLinks, setProjectClubLinks] = useState<ProjectClubLink[]>([]);
+  const [canManageSelectedProjectView, setCanManageSelectedProjectView] = useState(false);
   const [projectDetailLoading, setProjectDetailLoading] = useState(false);
   const [newHighlightText, setNewHighlightText] = useState("");
   const [milestoneModalOpen, setMilestoneModalOpen] = useState(false);
@@ -147,6 +153,11 @@ export function ProjectsScreen({
   const [timeLogModalOpen, setTimeLogModalOpen] = useState(false);
   const [timeLogTarget, setTimeLogTarget] = useState<{ milestoneId: string; taskId: string; taskText: string } | null>(null);
   const [pendingFocusItem, setPendingFocusItem] = useState<{ id: string; type: "MILESTONE" | "TASK"; requestId?: string } | null>(null);
+  const [volunteerModalOpen, setVolunteerModalOpen] = useState(false);
+  const [volunteerTargetType, setVolunteerTargetType] = useState<VolunteerRequestTargetType>("NONE");
+  const [volunteerTargetId, setVolunteerTargetId] = useState("");
+  const [volunteerRequests, setVolunteerRequests] = useState<VolunteerRequest[]>([]);
+  const [volunteerRequestsOpen, setVolunteerRequestsOpen] = useState(false);
 
   const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories]);
 
@@ -535,11 +546,13 @@ export function ProjectsScreen({
   async function refreshProjectDetails(project: Project) {
     setProjectDetailLoading(true);
     try {
-      const [highlights, milestones, links, timelineEvents] = await Promise.all([
+      const canManage = await canManageProject(project, user.userId);
+      const [highlights, milestones, links, timelineEvents, requests] = await Promise.all([
         getProjectHighlights(project.id),
         getProjectMilestones(project.id),
         getProjectClubLinks(project.id, user.userId),
-        getCommonsFeedEvents(user.userId, { projectId: project.id, limit: 50 })
+        getCommonsFeedEvents(user.userId, { projectId: project.id, limit: 50 }),
+        canManage ? getVolunteerRequests(project.id, user.userId) : Promise.resolve([])
       ]);
       setProjectHighlights(highlights);
       const normalizedMilestones = milestones.map((item, index) => ({
@@ -550,6 +563,8 @@ export function ProjectsScreen({
       setProjectMilestones(normalizedMilestones);
       setProjectTimelineEvents(timelineEvents);
       setProjectClubLinks(links);
+      setVolunteerRequests(requests);
+      setCanManageSelectedProjectView(canManage);
       setTaskTimeByTaskId({});
       setTaskTimeLoadingByTaskId({});
       void loadTaskTimesForMilestones(project.id, normalizedMilestones).catch((err) => {
@@ -567,7 +582,21 @@ export function ProjectsScreen({
     setProjectTab("HIGHLIGHTS");
     setRequestClubModalOpen(false);
     setClubSearchQuery("");
+    setVolunteerModalOpen(false);
+    setVolunteerRequestsOpen(false);
+    setVolunteerTargetType("NONE");
+    setVolunteerTargetId("");
+    setCanManageSelectedProjectView(false);
     await refreshProjectDetails(project);
+  }
+
+  async function canManageProject(project: Project, actorId: string): Promise<boolean> {
+    if (!project.clubId) {
+      return project.ownerId === actorId || project.createdBy === actorId;
+    }
+    const members = await getClubMembers(project.clubId);
+    const me = members.find((member) => member.userId === actorId);
+    return me?.role === "OWNER" || me?.role === "MODERATOR";
   }
 
   function openAddTimeModal(milestoneId: string, task: ProjectMilestoneTask) {
@@ -864,12 +893,49 @@ export function ProjectsScreen({
 
   async function canManageSelectedProject(): Promise<boolean> {
     if (!selectedProject) return false;
-    if (!selectedProject.clubId) {
-      return selectedProject.ownerId === user.userId || selectedProject.createdBy === user.userId;
+    return canManageProject(selectedProject, user.userId);
+  }
+
+  async function handleSubmitVolunteerRequest() {
+    if (!selectedProject) return;
+
+    const normalizedTargetId = volunteerTargetType === "NONE" ? undefined : volunteerTargetId || undefined;
+    if (volunteerTargetType !== "NONE" && !normalizedTargetId) {
+      setMessage("Please choose a milestone or task to volunteer for.");
+      return;
     }
-    const members = await getClubMembers(selectedProject.clubId);
-    const me = members.find((member) => member.userId === user.userId);
-    return me?.role === "OWNER" || me?.role === "MODERATOR";
+
+    try {
+      await createVolunteerRequest({
+        projectId: selectedProject.id,
+        userId: user.userId,
+        targetType: volunteerTargetType,
+        targetId: normalizedTargetId
+      });
+      setVolunteerModalOpen(false);
+      setVolunteerTargetType("NONE");
+      setVolunteerTargetId("");
+      setMessage("Volunteer request submitted.");
+      await refreshProjectDetails(selectedProject);
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  }
+
+  async function handleReviewVolunteerRequest(requestId: string, status: "ACCEPTED" | "REJECTED") {
+    if (!selectedProject) return;
+    try {
+      await reviewVolunteerRequest({
+        projectId: selectedProject.id,
+        requestId,
+        actorId: user.userId,
+        status
+      });
+      setMessage(status === "ACCEPTED" ? "Volunteer request accepted." : "Volunteer request rejected.");
+      await refreshProjectDetails(selectedProject);
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
   }
 
   async function handleCreateHighlight() {
@@ -983,6 +1049,16 @@ export function ProjectsScreen({
   if (selectedProject) {
     const approvedLinks = projectClubLinks.filter((link) => link.status === "APPROVED");
     const pendingLinks = projectClubLinks.filter((link) => link.status === "PENDING");
+    const milestoneVolunteerOptions = orderedMilestones.map((milestone) => ({
+      id: milestone.id,
+      label: `${milestone.order}. ${milestone.title}`
+    }));
+    const taskVolunteerOptions = orderedMilestones.flatMap((milestone) =>
+      (milestone.tasks ?? []).map((task) => ({
+        id: task.id,
+        label: `${milestone.order}. ${milestone.title} → ${task.text}`
+      }))
+    );
     const linkableClubs = allClubs.filter(
       (club) => !projectClubLinks.some((link) => link.clubId === club.id && link.status !== "REJECTED")
     );
@@ -1241,6 +1317,80 @@ export function ProjectsScreen({
       </Modal>
     );
 
+    const volunteerModal = (
+      <Modal visible={volunteerModalOpen} transparent animationType="fade" onRequestClose={() => setVolunteerModalOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setVolunteerModalOpen(false)} />
+          <View style={styles.modalCard}>
+            <Text style={styles.sectionTitle}>Volunteer</Text>
+            <Text style={styles.hint}>Choose what you want to help with on this project.</Text>
+
+            <View style={styles.rowWrap}>
+              {(["NONE", "MILESTONE", "TASK"] as VolunteerRequestTargetType[]).map((option) => (
+                <Pressable
+                  key={`volunteer-target-type-${option}`}
+                  onPress={() => {
+                    setVolunteerTargetType(option);
+                    setVolunteerTargetId("");
+                  }}
+                  style={[styles.pill, volunteerTargetType === option && styles.pillActive]}
+                >
+                  <Text style={[styles.pillText, volunteerTargetType === option && styles.pillTextActive]}>
+                    {option === "NONE" ? "No specification" : option === "MILESTONE" ? "Milestone" : "Task"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {volunteerTargetType === "MILESTONE" ? (
+              <ScrollView style={styles.modalList}>
+                {milestoneVolunteerOptions.length === 0 ? <Text style={styles.hint}>No milestones available.</Text> : null}
+                {milestoneVolunteerOptions.map((option) => {
+                  const active = volunteerTargetId === option.id;
+                  return (
+                    <Pressable
+                      key={`volunteer-milestone-${option.id}`}
+                      onPress={() => setVolunteerTargetId(option.id)}
+                      style={[styles.modalListItem, active && styles.selectedListItem]}
+                    >
+                      <Text style={styles.modalListItemTitle}>{option.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            ) : null}
+
+            {volunteerTargetType === "TASK" ? (
+              <ScrollView style={styles.modalList}>
+                {taskVolunteerOptions.length === 0 ? <Text style={styles.hint}>No tasks available.</Text> : null}
+                {taskVolunteerOptions.map((option) => {
+                  const active = volunteerTargetId === option.id;
+                  return (
+                    <Pressable
+                      key={`volunteer-task-${option.id}`}
+                      onPress={() => setVolunteerTargetId(option.id)}
+                      style={[styles.modalListItem, active && styles.selectedListItem]}
+                    >
+                      <Text style={styles.modalListItemTitle}>{option.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            ) : null}
+
+            <View style={styles.rowWrap}>
+              <Pressable onPress={handleSubmitVolunteerRequest} style={styles.buttonInline}>
+                <Text style={styles.buttonText}>Submit Request</Text>
+              </Pressable>
+              <Pressable onPress={() => setVolunteerModalOpen(false)} style={styles.buttonInline}>
+                <Text style={styles.buttonText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+
     const detailHeader = (
       <View>
         <Pressable
@@ -1324,6 +1474,48 @@ export function ProjectsScreen({
               <Text style={styles.hint}>All milestones completed 🎉</Text>
             )}
           </View>
+
+          <View style={styles.rowWrap}>
+            <Pressable onPress={() => setVolunteerModalOpen(true)} style={styles.buttonInline}>
+              <Text style={styles.buttonText}>Volunteer</Text>
+            </Pressable>
+            {canManageSelectedProjectView ? (
+              <Pressable onPress={() => setVolunteerRequestsOpen((prev) => !prev)} style={styles.buttonInline}>
+                <Text style={styles.buttonText}>Volunteer Requests</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {volunteerRequestsOpen ? (
+            <View style={styles.clubPanel}>
+              <Text style={styles.activeMilestoneTitle}>Volunteer Requests</Text>
+              {volunteerRequests.length === 0 ? <Text style={styles.hint}>No volunteer requests yet.</Text> : null}
+              {volunteerRequests.map((request) => (
+                <View key={request.id} style={styles.pendingCard}>
+                  <Text style={styles.title}>@{request.userId}</Text>
+                  <Text style={styles.hint}>
+                    {request.targetType === "NONE"
+                      ? "No specific target"
+                      : request.targetType === "MILESTONE"
+                        ? `Milestone: ${milestoneVolunteerOptions.find((option) => option.id === request.targetId)?.label ?? request.targetId}`
+                        : `Task: ${taskVolunteerOptions.find((option) => option.id === request.targetId)?.label ?? request.targetId}`}
+                  </Text>
+                  <Text style={styles.hint}>Status: {request.status}</Text>
+                  <Text style={styles.hint}>Requested: {new Date(request.createdAt).toLocaleString()}</Text>
+                  {request.status === "PENDING" ? (
+                    <View style={styles.rowWrap}>
+                      <Pressable onPress={() => handleReviewVolunteerRequest(request.id, "ACCEPTED")} style={styles.buttonInline}>
+                        <Text style={styles.buttonText}>Accept</Text>
+                      </Pressable>
+                      <Pressable onPress={() => handleReviewVolunteerRequest(request.id, "REJECTED")} style={styles.buttonInline}>
+                        <Text style={styles.buttonText}>Reject</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          ) : null}
         </Animated.View>
         <View style={styles.rowWrap}>
           <Pressable onPress={() => setProjectTab("HIGHLIGHTS")} style={[styles.pill, projectTab === "HIGHLIGHTS" && styles.pillActive]}><Text style={[styles.pillText, projectTab === "HIGHLIGHTS" && styles.pillTextActive]}>Highlights</Text></Pressable>
@@ -1356,6 +1548,7 @@ export function ProjectsScreen({
             )}
           />
           {requestClubModal}
+          {volunteerModal}
         </>
       );
     }
@@ -1379,6 +1572,7 @@ export function ProjectsScreen({
             )}
           />
           {requestClubModal}
+          {volunteerModal}
         </>
       );
     }
@@ -1523,6 +1717,7 @@ export function ProjectsScreen({
         {scheduleEditorModal}
         {addTimeModal}
         {timeLogModal}
+        {volunteerModal}
       </>
     );
   }
@@ -1681,6 +1876,7 @@ const styles = StyleSheet.create({
   taskText: { fontSize: 16, color: "#222", flexShrink: 1 },
   modalList: { maxHeight: 280, marginBottom: 8 },
   modalListItem: { borderWidth: 1, borderColor: "#e1e1e1", borderRadius: 10, padding: 10, marginBottom: 8 },
+  selectedListItem: { borderColor: "#0b57d0", backgroundColor: "#eef4ff" },
   modalListItemTitle: { fontWeight: "600", marginBottom: 4 },
   inlineLinkRow: { paddingVertical: 3 },
   inlineLinkText: { color: "#0b57d0", fontWeight: "600" },

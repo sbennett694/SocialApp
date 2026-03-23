@@ -13,6 +13,7 @@ import {
   Reaction,
   Report,
   TaskTimeEntry,
+  VolunteerRequest,
   User,
   Visibility
 } from "../domain/types";
@@ -98,6 +99,7 @@ export const store = {
   projectClubLinks: [] as ProjectClubLink[],
   projectMilestones: [] as ProjectMilestone[],
   projectHighlights: [] as ProjectHighlight[],
+  volunteerRequests: [] as VolunteerRequest[],
   taskTimeEntries: [] as TaskTimeEntry[],
   reactions: [] as Reaction[],
   comments: [] as Comment[],
@@ -122,6 +124,7 @@ export function resetStoreToDefault() {
   clearArray(store.projectClubLinks);
   clearArray(store.projectMilestones);
   clearArray(store.projectHighlights);
+  clearArray(store.volunteerRequests);
   clearArray(store.taskTimeEntries);
   clearArray(store.reactions);
   clearArray(store.comments);

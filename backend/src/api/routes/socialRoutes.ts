@@ -21,6 +21,9 @@ import {
   Report,
   ReportReason,
   TaskTimeEntry,
+  VolunteerRequest,
+  VolunteerRequestStatus,
+  VolunteerRequestTargetType,
   ThreadType,
   Visibility
 } from "../../domain/types";
@@ -96,6 +99,7 @@ const {
   projects,
   projectClubLinks,
   projectMilestones,
+  volunteerRequests,
   taskTimeEntries,
   projectHighlights,
   reactions,
@@ -309,6 +313,50 @@ function ensureProjectReadable(projectId: string, viewerId: string): Project | n
   if (!project) return null;
   if (!canViewProject(project, viewerId)) return null;
   return project;
+}
+
+function findProjectTarget(
+  projectId: string,
+  targetType: VolunteerRequestTargetType,
+  targetId?: string
+): { milestoneId?: string; taskId?: string } | null {
+  if (targetType === "NONE") {
+    return targetId ? null : {};
+  }
+
+  if (!targetId) return null;
+
+  if (targetType === "MILESTONE") {
+    const milestone = projectMilestones.find((item) => item.id === targetId && item.projectId === projectId);
+    if (!milestone) return null;
+    return { milestoneId: milestone.id };
+  }
+
+  for (const milestone of projectMilestones) {
+    if (milestone.projectId !== projectId) continue;
+    const task = milestone.tasks.find((item) => item.id === targetId);
+    if (task) {
+      return { milestoneId: milestone.id, taskId: task.id };
+    }
+  }
+
+  return null;
+}
+
+function normalizeVolunteerRequestTargetType(value: unknown): VolunteerRequestTargetType | null {
+  const normalized = String(value ?? "NONE").trim().toUpperCase();
+  if (normalized === "NONE" || normalized === "MILESTONE" || normalized === "TASK") {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeVolunteerRequestStatus(value: unknown): VolunteerRequestStatus | null {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (normalized === "PENDING" || normalized === "ACCEPTED" || normalized === "REJECTED") {
+    return normalized;
+  }
+  return null;
 }
 
 router.get("/health", (_req, res) => {
@@ -1820,6 +1868,112 @@ router.post("/projects", (req, res) => {
   });
 
   return res.status(201).json(project);
+});
+
+router.post("/projects/:projectId/volunteer-requests", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const userId = String(req.body?.userId ?? "");
+  const project = projects.find((entry) => entry.id === projectId);
+
+  if (!project) {
+    return res.status(404).json({ message: "Project not found." });
+  }
+
+  if (!userId || !canViewProject(project, userId)) {
+    return res.status(403).json({ message: "Only users who can view the project can volunteer." });
+  }
+
+  const targetType = normalizeVolunteerRequestTargetType(req.body?.targetType);
+  if (!targetType) {
+    return res.status(400).json({ message: "targetType must be NONE, MILESTONE, or TASK." });
+  }
+
+  const rawTargetId = req.body?.targetId;
+  const targetId = rawTargetId === undefined || rawTargetId === null || String(rawTargetId).trim() === ""
+    ? undefined
+    : String(rawTargetId);
+
+  const targetContext = findProjectTarget(projectId, targetType, targetId);
+  if (!targetContext) {
+    return res.status(400).json({ message: "Selected volunteer target is invalid for this project." });
+  }
+
+  const duplicate = volunteerRequests.find(
+    (request) =>
+      request.projectId === projectId &&
+      request.userId === userId &&
+      request.status === "PENDING" &&
+      request.targetType === targetType &&
+      (request.targetId ?? "") === (targetId ?? "")
+  );
+
+  if (duplicate) {
+    return res.status(409).json({ message: "An identical pending volunteer request already exists." });
+  }
+
+  const request: VolunteerRequest = {
+    id: uuidv4(),
+    projectId,
+    userId,
+    targetType,
+    targetId,
+    status: "PENDING",
+    createdAt: new Date().toISOString()
+  };
+
+  volunteerRequests.push(request);
+  return res.status(201).json(request);
+});
+
+router.get("/projects/:projectId/volunteer-requests", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const actorId = String(req.query.actorId ?? "");
+  const project = projects.find((entry) => entry.id === projectId);
+
+  if (!project) {
+    return res.status(404).json({ message: "Project not found." });
+  }
+
+  if (!actorId || !canManageProject(project, actorId)) {
+    return res.status(403).json({ message: "Only project owner/admin can review volunteer requests." });
+  }
+
+  const items = volunteerRequests
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+
+  return res.json(items);
+});
+
+router.patch("/projects/:projectId/volunteer-requests/:requestId", (req, res) => {
+  const projectId = String(req.params.projectId);
+  const requestId = String(req.params.requestId);
+  const actorId = String(req.body?.actorId ?? "");
+  const status = normalizeVolunteerRequestStatus(req.body?.status);
+  const project = projects.find((entry) => entry.id === projectId);
+
+  if (!project) {
+    return res.status(404).json({ message: "Project not found." });
+  }
+
+  if (!actorId || !canManageProject(project, actorId)) {
+    return res.status(403).json({ message: "Only project owner/admin can review volunteer requests." });
+  }
+
+  if (status !== "ACCEPTED" && status !== "REJECTED") {
+    return res.status(400).json({ message: "status must be ACCEPTED or REJECTED." });
+  }
+
+  const request = volunteerRequests.find((item) => item.id === requestId && item.projectId === projectId);
+  if (!request) {
+    return res.status(404).json({ message: "Volunteer request not found." });
+  }
+
+  request.status = status;
+  request.reviewedAt = new Date().toISOString();
+  request.reviewedBy = actorId;
+
+  return res.json(request);
 });
 
 router.get("/projects/:projectId/clubs", (req, res) => {

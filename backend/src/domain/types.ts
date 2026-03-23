@@ -44,6 +44,10 @@ export type ProjectVisibility =
   | "CLUB_MODERATORS"
   | "CLUB_OWNER_ONLY";
 
+export type VolunteerRequestTargetType = "NONE" | "MILESTONE" | "TASK";
+
+export type VolunteerRequestStatus = "PENDING" | "ACCEPTED" | "REJECTED";
+
 export type TaskTimeEntryType = "MANUAL";
 
 export type PostTag = "WIN" | "PROGRESS" | "TIP" | "QUESTION" | "SHOWCASE";
@@ -198,4 +202,16 @@ export type TaskTimeEntry = {
   createdAt: string;
   updatedAt: string;
   isDeleted?: boolean;
+};
+
+export type VolunteerRequest = {
+  id: string;
+  projectId: string;
+  userId: string;
+  targetType: VolunteerRequestTargetType;
+  targetId?: string;
+  status: VolunteerRequestStatus;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
 };
